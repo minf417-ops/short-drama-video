@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>多Agent短剧剧本生成系统</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Multi-Agent Script Studio</p>
+        <h1>多Agent短剧剧本生成系统</h1>
+        <p class="subtitle">Planner / Writer / Reviewer / Director 协作生成，支持自定义输入、实时过程展示与 PDF/Word 导出。</p>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card form-card full-width">
+        <h2>创作输入</h2>
+        <form id="generate-form">
+          <div class="section-title">核心设定</div>
+          <div class="field">
+            <label for="theme">主题</label>
+            <input id="theme" name="theme" placeholder="例如：豪门复仇中，失忆女主发现仇人竟是未婚夫" required>
+          </div>
+
+          <div class="two-col">
+            <div class="field">
+              <label for="keywords">关键词</label>
+              <input id="keywords" name="keywords" placeholder="例如：重生, 复仇, 打脸, 反转, 豪门, 权谋">
+            </div>
+            <div class="field">
+              <label for="audience">目标受众</label>
+              <input id="audience" name="audience" placeholder="例如：18-35岁女性用户">
+            </div>
+          </div>
+
+          <div class="section-title">风格控制</div>
+          <div class="two-col">
+            <div class="field">
+              <label for="styles">剧本风格（可多选）</label>
+              <select id="styles" name="styles" multiple size="9">
+                <option selected>都市悬疑</option>
+                <option>霸总</option>
+                <option>重生</option>
+                <option>复仇</option>
+                <option>甜宠</option>
+                <option>古风逆袭</option>
+                <option>修仙</option>
+                <option>玄幻</option>
+                <option>仙侠</option>
+                <option>武侠</option>
+                <option>末世</option>
+                <option>年代</option>
+                <option>穿越</option>
+                <option>穿书</option>
+                <option>校园</option>
+                <option>谍战</option>
+                <option>权谋</option>
+                <option>宫斗</option>
+                <option>职场</option>
+                <option>商战</option>
+                <option>科幻</option>
+                <option>赛博朋克</option>
+                <option>无限流</option>
+                <option>悬疑推理</option>
+                <option>惊悚</option>
+                <option>轻喜剧</option>
+              </select>
+              <small class="field-tip">Windows 下可按 Ctrl 多选</small>
+              <div id="selected-styles" class="selected-styles" aria-live="polite"></div>
+            </div>
+            <div class="field">
+              <label for="writing_tone">文字风格</label>
+              <select id="writing_tone" name="writing_tone">
+                <option selected>影视化强张力</option>
+                <option>白描写实</option>
+                <option>网感口语</option>
+                <option>诗性抒情</option>
+                <option>冷峻悬疑</option>
+                <option>古典凝练</option>
+                <option>轻快喜感</option>
+                <option>黑色幽默</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="section-title">长度与约束</div>
+          <div class="two-col">
+            <div class="field">
+              <label for="episodes">集数</label>
+              <input id="episodes" name="episodes" type="number" min="1" value="1">
+            </div>
+            <div class="field">
+              <label for="episode_duration">单集时长（秒）</label>
+              <input id="episode_duration" name="episode_duration" type="number" min="15" value="60">
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="extra_requirements">补充要求</label>
+            <textarea id="extra_requirements" name="extra_requirements" rows="5" placeholder="例如：前3秒必须出现强冲突；每15秒一个反转；结尾要有下一集钩子。"></textarea>
+          </div>
+
+          <div class="button-row">
+            <button type="submit" class="primary">一键生成</button>
+            <button type="button" id="reset-button" class="ghost">清空</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card process-card full-width" id="process-section">
+        <h2>生成过程</h2>
+        <div id="status-badge" class="status idle">待开始</div>
+        <div id="result-transition" class="result-transition"></div>
+        <div id="logs" class="logs"></div>
+      </section>
+
+      <section class="card result-card full-width hidden" id="result-section">
+        <div class="result-header">
+          <h2>生成结果</h2>
+          <div class="export-row" id="export-row"></div>
+        </div>
+        <div id="outline-panel" class="outline-panel"></div>
+        <div id="script-output" class="script-output">生成后的剧本会显示在这里。</div>
+      </section>
+    </main>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
