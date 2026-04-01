@@ -11,6 +11,11 @@ from services.llm_service import LLMService
 
 
 class GraphState(TypedDict, total=False):
+    """LangGraph 在节点之间传递的统一状态。
+
+    这里集中保存 request / outline / draft / review / logs 等关键数据，
+    让各个 Agent 节点通过同一个状态对象协作。
+    """
     request: UserRequest
     outline: PlanOutline
     draft: ScriptDraft
@@ -22,6 +27,13 @@ class GraphState(TypedDict, total=False):
 
 
 class DirectorAgent:
+    """多 Agent 总调度器。
+
+    自身不直接写大纲或剧本，而是负责：
+    - 组织 Planner / Writer / Reviewer 的执行顺序
+    - 管理修订次数
+    - 根据审校结果决定重写、结束或输出当前最优稿
+    """
     def __init__(self, llm: LLMService) -> None:
         self.llm = llm
         self.planner = PlannerAgent(llm)
@@ -39,6 +51,7 @@ class DirectorAgent:
         return state
 
     def _planner_node(self, state: GraphState) -> GraphState:
+        """第一阶段：把用户需求收敛成结构化剧情大纲。"""
         request = state["request"]
         state = self._append_log(state, "Planner：生成大纲、冲突点与反转设计")
         started_at = time.time()
@@ -51,6 +64,7 @@ class DirectorAgent:
         return state
 
     def _writer_node(self, state: GraphState) -> GraphState:
+        """第二阶段：根据大纲生成剧本，或根据上一轮反馈进行修订。"""
         request = state["request"]
         outline = state["outline"]
         revision_count = state.get("revision_count", 0)
@@ -72,6 +86,7 @@ class DirectorAgent:
         return state
 
     def _reviewer_node(self, state: GraphState) -> GraphState:
+        """第三阶段：审校当前剧本，判断是否通过或需要修补。"""
         request = state["request"]
         draft = state["draft"]
         state = self._append_log(state, "Reviewer：检查逻辑、格式、节奏与风格统一性")
@@ -89,6 +104,12 @@ class DirectorAgent:
         return state
 
     def _review_route(self, state: GraphState) -> str:
+        """状态图分叉逻辑。
+
+        - 审校通过：直接 finalize
+        - 可低成本修补：回到 writer
+        - 修订次数达到上限：直接 finalize
+        """
         review = state["review"]
         revision_count = state.get("revision_count", 0)
         if review.approved:
@@ -100,6 +121,7 @@ class DirectorAgent:
         return "rewrite"
 
     def _rewrite_node(self, state: GraphState) -> GraphState:
+        """把审校意见回填到状态中，供下一轮 Writer 定向修补。"""
         review = state["review"]
         draft = state.get("draft")
         state = self._append_log(state, f"Reviewer：未通过，修订建议：{review.feedback}")
@@ -111,6 +133,7 @@ class DirectorAgent:
         return state
 
     def _finalize_node(self, state: GraphState) -> GraphState:
+        """决定最终输出哪一版剧本。"""
         review: Optional[ReviewResult] = state.get("review")
         draft: Optional[ScriptDraft] = state.get("draft")
         if review and review.approved:
@@ -124,6 +147,7 @@ class DirectorAgent:
         return state
 
     def _should_use_review_script(self, review: ReviewResult, draft: Optional[ScriptDraft]) -> bool:
+        """防止 Reviewer 返回的润色稿过短、缺场景或整体退化时覆盖原稿。"""
         polished = (review.polished_script or "").strip()
         if not polished:
             return False
@@ -142,6 +166,7 @@ class DirectorAgent:
         return True
 
     def _scene_marker_count(self, content: str) -> int:
+        """兼容多种场景头格式，统计剧本里的实际场景数。"""
         import re
 
         scene_numbers = set()
@@ -154,6 +179,7 @@ class DirectorAgent:
         return len(scene_numbers)
 
     def _target_scene_count(self, request: UserRequest) -> int:
+        """根据单集时长与集数推算目标场景数。"""
         if request.episode_duration <= 45:
             per_episode = 3
         elif request.episode_duration <= 90:
@@ -163,9 +189,12 @@ class DirectorAgent:
         return per_episode * max(request.episodes, 1)
 
     def _script_completeness(self, request: UserRequest, script: str) -> Dict[str, Any]:
+        """对最终脚本做完整性判断，供接口层决定是否允许继续导出 / 视频化。"""
         target_scene_count = self._target_scene_count(request)
         actual_scene_count = self._scene_marker_count(script)
-        is_complete = bool(script.strip()) and actual_scene_count >= target_scene_count and script.strip().endswith(("。", "！", "？"))
+        valid_endings = ("\u3002", "\uff01", "\uff1f", "\u201d", "\u2019", "\u3011", "\uff09", ")", "\u2026", "\u2014", "\u2014\u2014", "\u300b", ".")
+        scene_ok = actual_scene_count >= max(target_scene_count - 1, 1)
+        is_complete = bool(script.strip()) and scene_ok and script.strip().endswith(valid_endings)
         return {
             "is_complete": is_complete,
             "target_scene_count": target_scene_count,
@@ -173,6 +202,7 @@ class DirectorAgent:
         }
 
     def _build_graph(self):
+        """定义 LangGraph 状态图，把节点和条件路由显式表达出来。"""
         graph = StateGraph(GraphState)
         graph.add_node("planner", self._planner_node)
         graph.add_node("writer", self._writer_node)
@@ -197,6 +227,7 @@ class DirectorAgent:
         return graph.compile()
 
     def run(self, request: UserRequest, logger: Callable[[str], None]) -> Dict[str, Any]:
+        """对外统一入口：执行多 Agent 工作流并返回结构化结果。"""
         self._runtime_logger = logger
         try:
             logger("Director：开始协调多Agent工作流")

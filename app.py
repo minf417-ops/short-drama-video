@@ -27,12 +27,14 @@ video_pipeline_service = VideoPipelineService(os.path.join(OUTPUT_DIR, "video_mv
 
 
 def _get_session_id() -> str:
+    """为当前浏览器会话生成并缓存 session_id，用于把多次请求归到同一用户会话。"""
     if "session_id" not in session:
         session["session_id"] = str(uuid4())
     return session["session_id"]
 
 
 def _build_request(form: dict) -> UserRequest:
+    """把前端 JSON 请求转换成内部统一的 UserRequest，顺便做默认值和类型兜底。"""
     def _safe_int(value: object, default: int) -> int:
         try:
             return int(value)
@@ -43,7 +45,15 @@ def _build_request(form: dict) -> UserRequest:
     keywords = [item.strip() for item in keywords_text.split(",") if item.strip()]
     raw_styles = form.get("styles", [])
     if isinstance(raw_styles, str):
-        styles = [item.strip() for item in raw_styles.split(",") if item.strip()]
+        import json as _json
+        try:
+            parsed = _json.loads(raw_styles)
+            if isinstance(parsed, list):
+                styles = [str(s).strip() for s in parsed if str(s).strip()]
+            else:
+                styles = [item.strip() for item in raw_styles.split(",") if item.strip()]
+        except (ValueError, TypeError):
+            styles = [item.strip() for item in raw_styles.split(",") if item.strip()]
     elif isinstance(raw_styles, list):
         styles = [str(item).strip() for item in raw_styles if str(item).strip()]
     else:
@@ -64,12 +74,20 @@ def _build_request(form: dict) -> UserRequest:
 
 
 def _should_generate_video(payload: dict) -> bool:
+    """兼容布尔值和字符串开关，决定这次生成是否继续进入视频流水线。"""
     raw_value = payload.get("generate_video", False)
     if isinstance(raw_value, bool):
         return raw_value
     if isinstance(raw_value, str):
         return raw_value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(raw_value)
+
+
+def _has_parseable_script(result: dict) -> bool:
+    script_text = str(result.get("script", "")).strip()
+    if not script_text:
+        return False
+    return any(token in script_text for token in ["场景", "对白", "内景", "外景", "动作描述"]) and len(script_text) >= 60
 
 
 @app.route("/")
@@ -85,6 +103,12 @@ def health():
 
 @app.route("/api/generate", methods=["POST"])
 def generate():
+    """项目主入口：
+    1. 接收用户自定义输入
+    2. 构建结构化请求并校验
+    3. 异步触发 Director 多 Agent 工作流
+    4. 在剧本完整时导出文档，并可选继续生成视频
+    """
     payload = request.get_json() or {}
     user_request = _build_request(payload)
     if not user_request.theme:
@@ -97,6 +121,11 @@ def generate():
     job_store.set_status(job_id, "running")
 
     def task() -> None:
+        """后台线程真正执行长链路任务，避免接口请求长时间阻塞。
+
+        这里把“剧本生成”和“视频生成”都挂到同一个 job 上，前端只需要轮询一个 job_id
+        就能看到日志、错误和最终产物。
+        """
         try:
             runtime = llm_service.runtime_info()
             mode_label = "严格API模式" if runtime["strict_api"] else "标准模式"
@@ -104,19 +133,31 @@ def generate():
             result = director_agent.run(user_request, lambda message: job_store.add_log(job_id, message))
             result["llm"] = llm_service.runtime_info()
             script_status = result.get("script_status", {})
-            if not script_status.get("is_complete", False):
+            should_generate_video = _should_generate_video(payload)
+            allow_best_effort_video = should_generate_video and _has_parseable_script(result)
+            is_complete = script_status.get("is_complete", False)
+            warnings: list[str] = []
+            if is_complete:
+                docx_path = export_service.export_docx(result["title"], result["script"])
+                pdf_path = export_service.export_pdf(result["title"], result["script"])
+                result["exports"] = {
+                    "docx": os.path.basename(docx_path),
+                    "pdf": os.path.basename(pdf_path),
+                }
+            else:
                 result["exports"] = None
-                job_store.set_result(job_id, result)
-                job_store.set_error(job_id, "生成结果不完整，请重试或缩短单次生成范围")
-                return
-            docx_path = export_service.export_docx(result["title"], result["script"])
-            pdf_path = export_service.export_pdf(result["title"], result["script"])
-            result["exports"] = {
-                "docx": os.path.basename(docx_path),
-                "pdf": os.path.basename(pdf_path),
-            }
-            if _should_generate_video(payload):
-                job_store.add_log(job_id, "VideoPipeline：开始基于最终剧本生成视频")
+                if allow_best_effort_video:
+                    warning = "剧本未完全通过审校，已切换为 best-effort 视频生成模式"
+                    warnings.append(warning)
+                    job_store.add_log(job_id, f"VideoPipeline：{warning}")
+                else:
+                    job_store.set_result(job_id, result)
+                    job_store.set_error(job_id, "生成结果不完整，请重试或缩短单次生成范围")
+                    return
+            if should_generate_video:
+                # 视频能力建立在“最终剧本已经通过基础完整性校验”之上，
+                # 避免把结构不完整的文本继续放大成更难排查的视频问题。
+                job_store.add_log(job_id, "VideoPipeline：开始基于最终剧本生成视频" if is_complete else "VideoPipeline：开始基于可解析剧本执行 best-effort 视频生成")
                 video_result = video_pipeline_service.build_project(
                     title=result["title"],
                     theme=user_request.theme,
@@ -133,6 +174,8 @@ def generate():
                     "notes": render_plan["notes"],
                 }
                 job_store.add_log(job_id, f"VideoPipeline：完成，输出视频 {render_plan['output_video_path']}")
+            if warnings:
+                result["warnings"] = warnings
             job_store.set_result(job_id, result)
         except Exception as exc:
             job_store.set_error(job_id, f"{exc}\n{traceback.format_exc()}")

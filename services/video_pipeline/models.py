@@ -9,6 +9,10 @@ class CharacterProfile:
     name: str
     traits: list[str] = field(default_factory=list)
     voice_style: str = "neutral"
+    gender: str = "unknown"
+    age_group: str = "adult"
+    identity: str = ""
+    speech_style: str = "自然克制"
     appearance: str = ""
     costume: str = ""
     temperament: str = ""
@@ -27,15 +31,22 @@ class Shot:
     index: int
     duration_seconds: float
     visual_description: str
+    viewpoint: str
     camera: str
     framing: str
     camera_movement: str
+    lens_language: str
+    shot_purpose: str
     transition: str
     emotion: str
     expression: str = ""
     body_action: str = ""
     scene_details: str = ""
     character_focus: str = ""
+    character_identity: str = ""
+    speaker_gender: str = "unknown"
+    speaker_age_group: str = "adult"
+    delivery_style: str = "自然克制"
     characters: list[str] = field(default_factory=list)
     dialogue: list[DialogueLine] = field(default_factory=list)
     narration: str = ""
@@ -55,6 +66,7 @@ class Scene:
     summary: str
     environment_details: str = ""
     characters: list[str] = field(default_factory=list)
+    character_profiles: dict[str, dict[str, str]] = field(default_factory=dict)
     dialogue: list[DialogueLine] = field(default_factory=list)
     shots: list[Shot] = field(default_factory=list)
 

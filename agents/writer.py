@@ -5,10 +5,19 @@ from services.llm_service import LLMService
 
 
 class WriterAgent:
+    """根据 Planner 大纲生成正式剧本。
+
+    当前 Writer 的目标不只是写出“能看”的文本，还要尽量输出更适合后续视频解析的
+    场景结构，方便下游拆成 Scene / Shot。
+    """
     def __init__(self, llm: LLMService) -> None:
         self.llm = llm
 
     def run(self, request: UserRequest, outline: PlanOutline, revision_feedback: str = "") -> ScriptDraft:
+        """优先走在线生成，并按质量情况依次尝试补尾、定向重写和 fallback。
+
+        这里的核心目标是提升长文本剧本的可交付性，而不是只做一次简单生成。
+        """
         system_prompt = "你是短剧编剧Agent。请生成专业短剧剧本，必须包含场景号、内外景、时间、地点、角色造型、人物情绪、动作描述、对白、分镜提示。分镜提示必须可直接用于视频解析，包含景别、运镜、转场、焦点人物、表情和微动作。对白简洁有力，节奏快。你必须严格围绕用户指定主题与风格写作，不得套用别的题材，不得偷换成霸总、甜宠或无关复仇模板。禁止输出Markdown标题、分隔线、代码块或额外说明，只输出剧本文本。"
         reversals_text = "; ".join(
             [
@@ -29,6 +38,8 @@ class WriterAgent:
         scene_blueprint = self._build_scene_blueprint(outline, scene_count)
         existing_script = self._extract_existing_script(revision_feedback)
         if existing_script:
+            # 如果审校反馈里已经带回当前剧本，优先尝试“局部修尾”，
+            # 避免整稿重写导致前文重复或风格漂移。
             repaired = self._repair_tail_only(existing_script, request, outline, scene_count, style_text)
             repaired = self._post_process_script(repaired, scene_count)
             quality_issues = self._validate_content(repaired, request)
@@ -76,10 +87,10 @@ class WriterAgent:
 动作描述：
 对白：
 分镜提示：
-3. `角色造型&情绪` 必须包含人物外貌、服装、年龄感、当下情绪，首次出场要交代身份与动机。
+3. `角色造型&情绪` 必须包含人物外貌、服装、年龄感、性别线索、身份关系、当下情绪，首次出场要交代身份、动机和说话气质。
 4. `动作描述` 必须包含明确行动、互动关系、站位变化或物件动作，不能只写抽象心理。
-5. `对白` 保持网感和可演性，单句简洁有冲击力，避免大段解释。
-6. `分镜提示` 必须直接写出：景别、运镜、转场、焦点人物、表情、微动作、画面重点。
+5. `对白` 保持网感和可演性，单句简洁有冲击力，避免大段解释；关键人物的台词要体现年龄感、身份差异和语气特征，例如冷峻压迫、温柔克制、脆弱哽咽、年轻利落。
+6. `分镜提示` 必须直接写出：景别、镜头类型、视角、运镜、转场、焦点人物、表情、微动作、画面重点，并明确镜头如何推进剧情或放大情绪。
 7. 必须把主题核心冲突自然写进剧情推进中，不能只借标题带过。
 8. 至少自然融入2个关键词原词到动作、对白或场景目标中。
 9. 总字数尽量控制在 900-1500 字，保证每个场景写完整，不要在对白、动作或分镜提示中途截断。
@@ -90,6 +101,8 @@ class WriterAgent:
 13. 场景推进蓝图：
 {scene_blueprint}
 14. 输出时不要写“镜头1/镜头2”这种简略标签，统一把镜头语言写进 `分镜提示` 字段。
+15. 每个场景至少给出一个可直接用于视频生成的明确视角推进，例如“先环境观察，再切人物对位，最后近景逼近情绪爆点”。
+16. 若存在多人对手戏，必须写清楚谁是焦点人物、谁在前景、谁在后景、镜头跟随谁移动。
 """
         try:
             api_mode = "api"
@@ -109,6 +122,7 @@ class WriterAgent:
                 for issue in ["内容疑似截断", "结尾场景不完整", "场景数量超出", "场景数量不足"]
             )
             if needs_targeted_repair:
+                # 长文本最常见的问题集中在尾部，因此优先走定向补尾。
                 content = self._repair_tail_only(content, request, outline, scene_count, style_text)
                 content = self._post_process_script(content, scene_count)
                 quality_issues = self._validate_content(content, request)
@@ -116,6 +130,7 @@ class WriterAgent:
                 soft_issues = {"内容疑似截断", "结尾场景不完整", "场景数量超出"}
                 remaining_hard_issues = [issue for issue in quality_issues if issue not in soft_issues]
                 if remaining_hard_issues:
+                    # 只有还存在主题覆盖、结构缺失等硬问题时，才触发一次更强的定向重写。
                     rewrite_prompt = f"""
 你输出的剧本基本可用，但仍需定向修补以下问题：{'; '.join(remaining_hard_issues)}
 请基于当前剧本直接优化，不要偷换题材，不要删掉已有有效内容，重点修补：
@@ -394,21 +409,21 @@ class WriterAgent:
 
     def _generation_max_tokens(self, scene_count: int) -> int:
         if scene_count <= 3:
-            return 1000
-        if scene_count <= 6:
             return 1400
+        if scene_count <= 6:
+            return 2000
         if scene_count <= 9:
-            return 1800
-        return 2200
+            return 2600
+        return 3200
 
     def _rewrite_max_tokens(self, scene_count: int) -> int:
         if scene_count <= 3:
-            return 900
-        if scene_count <= 6:
             return 1200
+        if scene_count <= 6:
+            return 1600
         if scene_count <= 9:
-            return 1500
-        return 1800
+            return 2000
+        return 2400
 
     def _tail_append_max_tokens(self, scene_count: int, existing_scene_count: int) -> int:
         missing = max(scene_count - existing_scene_count, 1)

@@ -17,7 +17,7 @@ class ReviewerAgent:
                 polished_script=draft.content,
                 metadata={"review_mode": "local_fastpath"},
             )
-        system_prompt = "你是短剧审校Agent。你要检查逻辑、节奏、格式、风格统一性，并过滤违规内容。不要输出分析过程、解释或Markdown，只输出JSON。"
+        system_prompt = "你是短剧审校Agent。你要检查逻辑、节奏、格式、风格统一性，并过滤违规内容。不要输出分析过程、解释或Markdown，只输出JSON。不要在JSON中包含剧本原文。"
         style_text = "、".join(request.styles)
         user_prompt = f"""
 请审校以下短剧剧本并输出JSON：
@@ -28,22 +28,23 @@ class ReviewerAgent:
 剧本内容：
 {draft.content}
 
-JSON字段：
-- approved: bool
-- feedback: string
-- polished_script: string
+JSON字段（只输出以下两个字段，不要输出剧本原文）：
+- approved: bool（是否通过审校）
+- feedback: string（简要修订建议，100字以内）
 """
         try:
             data = self.llm.complete_json(
                 system_prompt,
                 user_prompt,
-                required_fields=["approved", "feedback", "polished_script"],
+                required_fields=["approved", "feedback"],
                 temperature=0.2,
-                max_tokens=900,
+                max_tokens=2000,
             )
         except Exception as exc:
+            serious_issues = {"缺少场景结构", "缺少镜头结构", "篇幅过短", "内容疑似截断"}
+            has_serious = any(issue in serious_issues for issue in local_issues)
             return ReviewResult(
-                approved=not local_issues,
+                approved=not has_serious,
                 feedback=f"审校阶段降级处理：{exc}",
                 polished_script=draft.content,
                 metadata={
@@ -54,22 +55,10 @@ JSON字段：
             )
         approved = bool(data.get("approved", False))
         feedback = data.get("feedback", "审校完成")
-        polished_script = data.get("polished_script", draft.content)
-        if not polished_script or len(polished_script.strip()) < 200:
-            return ReviewResult(
-                approved=not local_issues,
-                feedback="审校阶段降级处理：润色稿过短，已保留原始剧本",
-                polished_script=draft.content,
-                metadata={
-                    "review_mode": "fallback",
-                    "tail_repair_only": "true" if self._should_tail_repair(local_issues) else "false",
-                    "local_issues": "; ".join(local_issues),
-                },
-            )
         return ReviewResult(
             approved=approved,
             feedback=feedback,
-            polished_script=polished_script,
+            polished_script=draft.content,
             metadata={
                 "review_mode": "api",
                 "tail_repair_only": "true" if self._should_tail_repair(local_issues) else "false",
