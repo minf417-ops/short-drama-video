@@ -1,6 +1,7 @@
 import re
+import time
 
-from .schemas import UserRequest, PlanOutline, ScriptDraft
+from .schemas import UserRequest, PlanOutline, ScriptDraft, EditRequest
 from services.llm_service import LLMService
 
 
@@ -12,13 +13,18 @@ class WriterAgent:
     """
     def __init__(self, llm: LLMService) -> None:
         self.llm = llm
+        self._logger = None
 
-    def run(self, request: UserRequest, outline: PlanOutline, revision_feedback: str = "") -> ScriptDraft:
+    def run(self, request: UserRequest, outline: PlanOutline, revision_feedback: str = "", logger=None) -> ScriptDraft:
         """优先走在线生成，并按质量情况依次尝试补尾、定向重写和 fallback。
 
         这里的核心目标是提升长文本剧本的可交付性，而不是只做一次简单生成。
+        logger: 可选的日志回调函数，用于报告生成进度。
         """
-        system_prompt = "你是短剧编剧Agent。请生成专业短剧剧本，必须包含场景号、内外景、时间、地点、角色造型、人物情绪、动作描述、对白、分镜提示。分镜提示必须可直接用于视频解析，包含景别、运镜、转场、焦点人物、表情和微动作。对白简洁有力，节奏快。你必须严格围绕用户指定主题与风格写作，不得套用别的题材，不得偷换成霸总、甜宠或无关复仇模板。禁止输出Markdown标题、分隔线、代码块或额外说明，只输出剧本文本。"
+        self._logger = logger
+        if request.episodes > 1:
+            return self._run_multi_episode(request, outline, revision_feedback)
+        system_prompt = "你是短剧编剧Agent，擅长写可直接拆解为视频分镜的结构化短剧剧本。每个场景包含：场景号、内外景、时间、地点、角色造型&情绪、动作描述、对白、分镜提示。写法参照电影分场景剧本：角色描写聚焦外貌辨识度与当前情绪；动作描写聚焦可拍摄的具体行为与空间关系；对白简洁有力、有人物辨识度；分镜提示一句话概括景别、运镜与情绪焦点。严格围绕用户主题与风格写作，不得偷换题材。仅输出剧本正文，禁止Markdown、代码块或解释。"
         reversals_text = "; ".join(
             [
                 (
@@ -77,32 +83,22 @@ class WriterAgent:
 审校修订重点：{revision_feedback or '无，直接输出最佳版本'}
 
 输出要求：
-1. 全剧严格控制在 {scene_count} 个场景内，不能少于也不能多于 {scene_count} 个场景，适配 {request.episode_duration} 秒短剧节奏，避免冗长铺垫。
-2. 每个场景必须严格使用以下结构输出，字段名不要改：
-场景号：
-内外景：
-时间：
-地点：
-角色造型&情绪：
-动作描述：
-对白：
-分镜提示：
-3. `角色造型&情绪` 必须包含人物外貌、服装、年龄感、性别线索、身份关系、当下情绪，首次出场要交代身份、动机和说话气质。
-4. `动作描述` 必须包含明确行动、互动关系、站位变化或物件动作，不能只写抽象心理。
-5. `对白` 保持网感和可演性，单句简洁有冲击力，避免大段解释；关键人物的台词要体现年龄感、身份差异和语气特征，例如冷峻压迫、温柔克制、脆弱哽咽、年轻利落。
-6. `分镜提示` 必须直接写出：景别、镜头类型、视角、运镜、转场、焦点人物、表情、微动作、画面重点，并明确镜头如何推进剧情或放大情绪。
-7. 必须把主题核心冲突自然写进剧情推进中，不能只借标题带过。
-8. 至少自然融入2个关键词原词到动作、对白或场景目标中。
-9. 总字数尽量控制在 900-1500 字，保证每个场景写完整，不要在对白、动作或分镜提示中途截断。
-10. 仅输出剧本正文，不要解释。
-11. 严禁偷换主题：必须明确写出“{request.theme}”对应的人物关系、身份反转和核心矛盾。
-12. 风格锁定要求：
+1. 全剧严格 {scene_count} 个场景，适配 {request.episode_duration} 秒短剧节奏，不多不少。
+2. 每个场景使用以下固定结构（字段名不要改）：
+场景号：（数字）
+内外景：（内景/外景）
+时间：（白天/夜晚/黄昏等）
+地点：（具体地点名）
+角色造型&情绪：（写出人物外貌辨识特征、服装风格与当前情绪状态，首次出场需交代身份关系。用分号隔开不同角色。不要写空泛的"衣着华丽"，要写具体。）
+动作描述：（写可拍摄的具体行为：走位、手部动作、物件互动、视线方向、空间距离变化。环境光线与道具细节自然融入动作中。不写抽象心理活动。）
+对白：（格式"角色名（动作/语气）：台词"。单句简短有力，体现人物身份差异。）
+分镜提示：（一句话概括：景别 + 运镜方向 + 焦点人物 + 情绪转折点。）
+3. 围绕"{request.theme}"展开核心冲突，至少自然融入2个关键词到剧情中。严禁偷换主题。
+4. 风格锁定：
 {style_rules}
-13. 场景推进蓝图：
+5. 场景推进蓝图：
 {scene_blueprint}
-14. 输出时不要写“镜头1/镜头2”这种简略标签，统一把镜头语言写进 `分镜提示` 字段。
-15. 每个场景至少给出一个可直接用于视频生成的明确视角推进，例如“先环境观察，再切人物对位，最后近景逼近情绪爆点”。
-16. 若存在多人对手戏，必须写清楚谁是焦点人物、谁在前景、谁在后景、镜头跟随谁移动。
+6. 仅输出剧本正文，不要解释，不要Markdown。**每个场景必须写完整，严禁中途截断。**
 """
         try:
             api_mode = "api"
@@ -192,8 +188,12 @@ class WriterAgent:
             issues.append("缺少动作描写")
         if "角色造型" not in content and "角色造型&情绪" not in content:
             issues.append("缺少角色状态描写")
-        if len(content.strip()) < 500:
+        if len(content.strip()) < 900:
             issues.append("篇幅过短")
+        if content.count("角色造型&情绪：") < target_scene_count:
+            issues.append("角色描写密度不足")
+        if content.count("分镜提示：") < target_scene_count:
+            issues.append("分镜描写密度不足")
         normalized_content = self._normalize_text(content)
         if not self._theme_is_covered(request.theme, normalized_content):
             issues.append("主题植入不足")
@@ -398,56 +398,121 @@ class WriterAgent:
             return False
         return normalized_keyword in normalized_content
 
-    def _target_scene_count(self, episode_duration: int, episodes: int) -> int:
+    def _scenes_per_episode(self, episode_duration: int) -> int:
         if episode_duration <= 45:
-            per_episode = 3
+            return 3
         elif episode_duration <= 90:
-            per_episode = 4
-        else:
-            per_episode = 5
-        return per_episode * max(episodes, 1)
+            return 4
+        return 5
+
+    def _target_scene_count(self, episode_duration: int, episodes: int) -> int:
+        return self._scenes_per_episode(episode_duration) * max(episodes, 1)
 
     def _generation_max_tokens(self, scene_count: int) -> int:
         if scene_count <= 3:
-            return 1400
+            return 4000
+        if scene_count <= 4:
+            return 5500
         if scene_count <= 6:
-            return 2000
+            return 7500
         if scene_count <= 9:
-            return 2600
-        return 3200
+            return 10000
+        if scene_count <= 12:
+            return 13000
+        return 16000
 
     def _rewrite_max_tokens(self, scene_count: int) -> int:
         if scene_count <= 3:
-            return 1200
+            return 3500
+        if scene_count <= 4:
+            return 5000
         if scene_count <= 6:
-            return 1600
+            return 7000
         if scene_count <= 9:
-            return 2000
-        return 2400
+            return 9000
+        if scene_count <= 12:
+            return 12000
+        return 15000
 
     def _tail_append_max_tokens(self, scene_count: int, existing_scene_count: int) -> int:
         missing = max(scene_count - existing_scene_count, 1)
         if missing <= 1:
-            return 700
+            return 1500
         if missing <= 2:
-            return 1000
+            return 2500
         if missing <= 4:
-            return 1400
-        return 1800
+            return 4000
+        if missing <= 6:
+            return 6000
+        return 8000
 
     def _build_style_rules(self, styles: list[str], writing_tone: str) -> str:
         rules: list[str] = []
         normalized = set(styles)
         if "都市悬疑" in normalized or "悬疑推理" in normalized:
             rules.append("- 都市悬疑：信息揭示要层层递进，证据链推动剧情，不要写成无脑情爱纠缠。")
+            rules.append("- 都市悬疑：每个关键场景至少给出一个可见线索、一个误导点或一个身份疑点。")
         if "复仇" in normalized:
             rules.append("- 复仇：主角目标必须明确，行动要针对伤害来源，不要空喊口号。")
+            rules.append("- 复仇：必须出现打脸、反制、逼供、揭穿、夺回利益或身份翻盘中的至少两类爽点。")
+        if "穿书" in normalized:
+            rules.append("- 穿书：必须写清主角知道原书剧情、原身处境、死亡/失败节点，并主动改写命运。")
+            rules.append("- 穿书：至少出现一次“剧情偏离原书预期”的明确桥段。")
+        if "重生" in normalized:
+            rules.append("- 重生：要体现前世记忆如何转化为本轮先手布局，不能只停留在设定说明。")
+        if "甜宠" in normalized:
+            rules.append("- 甜宠：糖点要服务人物关系推进，不能冲淡主线矛盾。")
+        if "古风逆袭" in normalized:
+            rules.append("- 古风逆袭：要有尊卑秩序、公开羞辱/打脸、身份翻案或名分逆转。")
+        if "年代" in normalized:
+            rules.append("- 年代：道具、服饰、生活空间、话语习惯要有年代感，不能写成现代都市口吻。")
+        if "修仙" in normalized or "仙侠" in normalized:
+            rules.append("- 修仙/仙侠：人物服化道、法器、宗门建筑、灵气流动、符纹光效必须具体，不要只写空泛仙气。")
         if "霸总" in normalized:
             rules.append("- 霸总：只可作为人物气场补充，不能盖过主线主题。")
         if "甜宠" not in normalized:
             rules.append("- 未选择甜宠时，禁止出现甜宠腔或撒糖式对白主导剧情。")
         if "权谋" in normalized or "商战" in normalized:
             rules.append("- 权谋/商战：冲突要通过利益交换、布局、博弈来呈现。")
+        if "犯罪" in normalized:
+            rules.append("- 犯罪：剧情要围绕犯罪事件展开，需有明确的作案动机、侦查推进和嫌疑链条。")
+        if "穿越" in normalized:
+            rules.append("- 穿越：主角必须利用穿越身份/知识形成信息差优势，展示具体的先知行动。")
+        if "校园" in normalized:
+            rules.append("- 校园：场景限定在校园及周边，人物关系围绕同学、师生展开，情节贴合学生生活。")
+        if "家庭伦理" in normalized:
+            rules.append("- 家庭伦理：冲突围绕家庭成员之间的利益、情感、代际矛盾展开，细节要有生活质感。")
+        if "体育竞技" in normalized:
+            rules.append("- 体育竞技：必须有明确的赛事目标、训练困境和比赛高光时刻，动作描写要具体可视化。")
+        if "医疗" in normalized:
+            rules.append("- 医疗：涉及诊断、手术、伦理抉择等专业场景，需有紧迫感和生死赌注。")
+        if "科幻" in normalized or "赛博朋克" in normalized:
+            rules.append("- 科幻/赛博朋克：世界观设定要有具体科技细节，场景需有未来感的视觉元素（霓虹、义体、AI界面等）。")
+        if "末世" in normalized:
+            rules.append("- 末世：环境必须体现末世特征（废墟、资源匮乏、危险生物），生存压力要贯穿始终。")
+        if "无限流" in normalized:
+            rules.append("- 无限流：副本/关卡规则必须明确，主角需在限定条件下用智力或能力通关。")
+        if "军旅" in normalized:
+            rules.append("- 军旅：军事纪律、战友情谊、任务压力要具体，体现军人特质和集体荣誉。")
+        if "虐恋" in normalized:
+            rules.append("- 虐恋：误会、牺牲、被迫分离的情节要有充分铺垫，虐点要服务于情感深度。")
+        if "治愈" in normalized:
+            rules.append("- 治愈：温暖细节和人物成长要自然渐进，避免强行煽情。")
+        if "暗黑" in normalized:
+            rules.append("- 暗黑：道德灰色地带和人性阴暗面要通过具体事件展现，不是单纯的恶意堆砌。")
+        if "热血" in normalized:
+            rules.append("- 热血：主角面对逆境时的信念和爆发要有层层递进，战斗/对抗场面要燃。")
+        if "黑色幽默" in normalized:
+            rules.append("- 黑色幽默：荒诞与讽刺并存，笑点背后要有深层社会或人性洞察。")
+        if "轻喜剧" in normalized:
+            rules.append("- 轻喜剧：节奏轻快，误会、反差、夸张手法制造笑点，但不失主线推进力。")
+        if "宫斗" in normalized:
+            rules.append("- 宫斗：等级制度、后宫势力、明争暗斗必须具体，体现智谋博弈和地位争夺。")
+        if "谍战" in normalized:
+            rules.append("- 谍战：潜伏、情报交换、身份危机要有悬念节奏，信任与背叛交织推进。")
+        rules.append("- 类型元素必须外显：身份压制、关系拉扯、资源争夺、公开对峙、情绪爆点都要落到具体场景里。")
+        rules.append("- 每个场景都要有明确功能：设局、试探、反击、揭露、翻盘、留钩，不能只有氛围没有事件。")
+        rules.append("- 默认采用高细节可视化写法：人物、服装、表情、环境、运镜都要具体到可直接给导演和视频模型使用。")
         rules.append(f"- 文字风格：整体语言必须符合“{writing_tone}”，不能口吻漂移。")
         return "\n".join(rules)
 
@@ -460,7 +525,13 @@ class WriterAgent:
             reversal = reversals[index] if index < len(reversals) else "局势骤变"
             act_summary = act.get("summary", "冲突升级") if isinstance(act, dict) else str(act)
             reversal_summary = reversal.get("summary", "局势骤变") if isinstance(reversal, dict) else str(reversal)
-            lines.append(f"- 场景{index + 1}：推进“{act_summary}”，并完成反转“{reversal_summary}”。")
+            if index == 0:
+                scene_goal = "开场即给出身份压制或生死危机，并抛出可见钩子"
+            elif index == scene_count - 1:
+                scene_goal = "完成阶段性翻盘或反杀，并留下更大钩子"
+            else:
+                scene_goal = "推进对抗、制造误判，再给出一次关系或利益反转"
+            lines.append(f"- 场景{index + 1}：推进“{act_summary}”，完成反转“{reversal_summary}”，场景功能是“{scene_goal}”。必须出现具体事件动作、人物关系拉扯和一个可视化爽点。")
         return "\n".join(lines)
 
     def _apply_revision_feedback(self, content: str, feedback: str) -> str:
@@ -500,32 +571,32 @@ class WriterAgent:
         while len(acts) < scene_count:
             acts.append({"act": f"第{len(acts) + 1}幕", "summary": reversal_lines[len(acts)]})
         locations = [
-            ("内景", "夜", "订婚宴会厅侧门"),
-            ("内景", "夜", "休息室"),
-            ("外景", "夜", "酒店地下车库"),
-            ("内景", "夜", "老宅书房"),
-            ("外景", "夜", "天台边缘"),
+            ("内景", "夜", "宗门大殿偏厅"),
+            ("外景", "夜", "万骨崖底禁地"),
+            ("内景", "夜", "祭天台外廊"),
+            ("内景", "夜", "祭阵中心"),
+            ("外景", "夜", "坍塌后的宗门废墟"),
         ]
         emotion_sets = [
-            ("女主苏晚，礼服未乱但眼神结冰，强压怒意", "男主顾承泽，西装笔挺却神色闪躲"),
-            ("苏晚摘下耳饰握紧证据，语气克制", "闺蜜林薇薇强装镇定，手心冒汗"),
-            ("苏晚步步逼近，杀气外露", "顾承泽嘴硬，试图抢夺手机"),
-            ("苏晚冷静设局，开始反制", "林薇薇情绪崩溃，防线松动"),
-            ("苏晚彻底掌控局面，只等收网", "顾承泽狼狈失控，底牌尽失"),
+            ("女主，二十出头，黑发半绾，婚制法袍外层赤金云纹薄纱已被鲜血浸透，唇色苍白却强撑冷意，眼底从震惊迅速凝成杀意", "男主，同龄青年，玄色礼袍束金冠，表面克制端正，实则眼神游移、指节发紧"),
+            ("女主发髻散乱，额角带血，破损法袍沾着尘土与骨灰，呼吸发颤却目光死死咬住前方", "残灵或对手以低沉、危险、诱导式姿态出现，气息逼仄"),
+            ("女主换上暗色斗篷遮住伤痕，脸色冷白，动作收束但杀气压不住", "对手衣冠整肃却防线松动，嘴硬，神色一寸寸失控"),
+            ("女主站进光阵中央，衣摆与黑焰同时翻卷，悲怒压到极致", "幕后者法袍鼓荡，面容狰狞，眼底有被逼急的惧色"),
+            ("女主立于废墟高处，发丝被夜风吹散，衣袍残破却脊背笔直，情绪从剧痛转成冷硬誓言", "幸存对手或旁观者狼狈失神，不敢直视她"),
         ]
         action_templates = [
-            "苏晚听见密谋后没有立刻闯入，而是先打开手机同步备份，把关键录音和现场画面同时上传到云端。",
-            "苏晚推门打断二人伪装，用一句试探性提问逼出破绽，迫使对方主动暴露真正目标。",
-            "顾承泽试图以婚约和家族压力反制，苏晚当场甩出早已准备好的证据链，反客为主。",
-            "林薇薇为了自保开始甩锅，苏晚顺势追问细节，让两人的口径当场对不上。",
-            "苏晚完成最后反杀，把全部证据交给赶到的警方或董事会代表，并留下下一集钩子。",
+            "主角先以极短停顿稳住身体，再一步步逼近冲突中心，衣摆拖过地面留下血痕或灵焰痕迹，用手、眼神和站位压迫对手，在动线变化里把真相一点点撕开。",
+            "主角在恶劣环境中完成重生或觉醒，先是蜷缩、挣扎、抬头，再借法器、骨骸、阵纹或灵气完成反转，动作层层递进，视觉上要有明显的能量变化。",
+            "主角带着隐藏伤势回到核心场域，故意示弱试探，让对手先出招，再借对方动作反制，过程中要写清距离拉近、视线碰撞和物件落点。",
+            "主角主动踏入最危险的位置，以身体承受代价换取阵法失控或真相曝光，要求把风、火、光、血、衣料、碎石等动态细节写出来。",
+            "主角在废墟或残局中完成最后宣判，不急着离开，而是停顿、转身、抬眼或垂眸，让余波和空间寂静形成结尾钩子。",
         ]
         dialogue_pairs = [
-            ("苏晚：原来我站在这里等的是订婚誓词，你们等的却是我的家产。", "顾承泽：你少在这儿装清高，没有我，你守不住这一切。"),
-            ("苏晚：你们以为把我哄进礼堂，我就会乖乖签字？", "林薇薇：晚晚，你先冷静，事情不是你听到的那样。"),
-            ("苏晚：从今天起，这场婚约不是喜事，是你们的证物。", "顾承泽：你真要把事情闹大，对苏家也没好处。"),
-            ("苏晚：你们最蠢的地方，是把我当成只会相信感情的人。", "林薇薇：都是他逼我的，我只是帮他传了几次消息！"),
-            ("苏晚：该结束了，今晚之后，你们一个都跑不掉。", "顾承泽：你赢这一局，不代表你真能活着拿回全部真相。"),
+            ("主角：我站在这里，不是等你们给我一个名分，是等你们把欠我的命债亲口认出来。", "对手：你现在这副样子，还拿什么跟我算账？"),
+            ("主角：这万骨崖吞不掉我，你们也一样。", "对手：你若接受力量，就再也回不了头。"),
+            ("主角：我今日回来，不是求活路，是来给你们断活路。", "对手：你别逼我把最后一点情面也撕碎。"),
+            ("主角：你最该怕的，不是我活着回来，是我把真相带回来了。", "对手：就算你知道了，又能改变什么！"),
+            ("主角：青霄宗的债，我会一层天一层天地讨。", "对手：你杀了我，也只是刚刚开始。"),
         ]
         scenes: list[str] = []
         for index in range(scene_count):
@@ -540,11 +611,360 @@ class WriterAgent:
 内外景：{location[0]}
 时间：{location[1]}
 地点：{location[2]}
-角色造型&情绪：{emotions[0]}；{emotions[1]}。服装保持前后一致，人物年龄感和身份信息明确。
-动作描述：围绕“{request.theme}”的核心矛盾推进。{actions} 同时自然埋入关键词：{keyword_text}。
+角色造型&情绪：{emotions[0]}；{emotions[1]}。要求把发型、衣料层次、颜色、饰物、伤痕、身份压迫感和此刻情绪都写实写满，保证观众一眼能看清人物关系与危险程度。
+动作描述：围绕“{request.theme}”的核心矛盾推进。{actions} 同时自然埋入关键词：{keyword_text}。环境里的风声、光线、尘土、血迹、法器、阵纹或建筑细节要参与动作，不要让人物悬空表演。
 对白：
 苏晚：{dialogues[0].replace("苏晚：", "").strip()}
 {"顾承泽" if index in {0, 2, 4} else "林薇薇"}：{dialogues[1].split("：", 1)[1].strip() if "：" in dialogues[1] else dialogues[1]}
-分镜提示：景别中景，运镜缓推或跟拍，转场硬切，焦点人物跟随当前冲突中心，表情和微动作清晰可见。突出{outline.core_conflict}，完成“{act.get('summary', beat)}”的推进，并以“{beat}”形成节奏反转。"""
+分镜提示：先用环境建立镜头交代空间、光线与危险源，再切到人物对位关系，最后用近景或特写逼近情绪爆点。景别、视角、运镜、转场、焦点人物、表情、微动作、前后景构图都要具体写清。突出{outline.core_conflict}，完成“{act.get('summary', beat)}”的推进，并以“{beat}”形成节奏反转。"""
             scenes.append(scene)
         return "\n\n".join(scenes)
+
+    # ===================== 多集生成 =====================
+
+    def _log(self, message: str) -> None:
+        """通过可选的 logger 回调输出进度日志。"""
+        if self._logger:
+            self._logger(message)
+
+    def _run_multi_episode(self, request: UserRequest, outline: PlanOutline, revision_feedback: str = "") -> ScriptDraft:
+        """并行生成多集剧本，大幅缩短耗时。"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        episodes = max(request.episodes, 1)
+        scenes_per_ep = self._scenes_per_episode(request.episode_duration)
+        max_workers = min(4, episodes)
+        self._log(f"Writer：多集并行模式，共{episodes}集×{scenes_per_ep}场景，{max_workers}路并发")
+        style_text = "、".join(request.styles)
+        style_rules = self._build_style_rules(request.styles, request.writing_tone)
+        system_prompt = (
+            "你是短剧编剧Agent，擅长按集生成可直接拆解为视频分镜的结构化短剧剧本。"
+            "每个场景包含：场景号、内外景、时间、地点、角色造型&情绪、动作描述、对白、分镜提示。"
+            "角色描写聚焦外貌辨识度与当前情绪；动作描写聚焦可拍摄的具体行为；"
+            "对白简洁有力；分镜提示一句话概括景别、运镜与情绪焦点。"
+            "严格围绕用户主题写作。仅输出本集剧本正文，禁止Markdown或解释。"
+        )
+        episode_plan = self._build_episode_plan(episodes, outline)
+        api_mode = "api_multi_episode"
+        error_reason = ""
+        gen_start = time.time()
+
+        def _generate_one(ep_num: int) -> str:
+            act_info = self._episode_act_info(ep_num, episodes, outline)
+            ep_reversal = self._episode_reversal(ep_num, episodes, outline.reversals)
+            is_first = ep_num == 1
+            is_last = ep_num == episodes
+            ep_prompt = f"""请为第{ep_num}集（共{episodes}集）生成剧本，本集包含{scenes_per_ep}个场景。
+
+总体信息：
+标题：{outline.title}
+核心冲突：{outline.core_conflict}
+本集所处幕次：{act_info}
+本集关键反转：{ep_reversal}
+{"开场钩子：" + outline.opening_hook if is_first else ""}
+{"本集为大结局，需用结尾钩子收束：" + outline.ending_hook if is_last else "本集结尾需留悬念，引导观众追看下一集。"}
+
+全剧各集规划（请严格只写第{ep_num}集，但了解前后文以保持连贯）：
+{episode_plan}
+
+用户需求：
+主题：{request.theme}
+关键词：{', '.join(request.keywords)}
+风格：{style_text}
+文字风格：{request.writing_tone}
+单集时长：{request.episode_duration}秒
+
+输出要求：
+1. 本集严格{scenes_per_ep}个场景，场景号从1到{scenes_per_ep}。
+2. 每个场景使用固定结构（字段名不要改）：
+场景号：（数字）
+内外景：（内景/外景）
+时间：（白天/夜晚/黄昏等）
+地点：（具体地点名）
+角色造型&情绪：（人物外貌辨识特征、服装与当前情绪，首次出场交代身份）
+动作描述：（可拍摄的具体行为：走位、手部动作、物件互动、视线方向）
+对白：（格式"角色名（动作/语气）：台词"，单句简短有力）
+分镜提示：（一句话：景别+运镜+焦点人物+情绪转折点）
+3. 围绕"{request.theme}"推进本集冲突，本集剧情不要与其他集重复。
+4. 风格锁定：
+{style_rules}
+5. 仅输出本集剧本正文，每个场景必须写完整，严禁中途截断。"""
+            self._log(f"Writer：正在生成第{ep_num}/{episodes}集...")
+            _ep_start = time.time()
+            try:
+                ep_content = self._normalize_api_script(
+                    self.llm.complete(
+                        system_prompt, ep_prompt,
+                        temperature=0.3,
+                        max_tokens=self._generation_max_tokens(scenes_per_ep),
+                    )
+                )
+                ep_content = self._post_process_script(ep_content, scenes_per_ep)
+                self._log(f"Writer：第{ep_num}集完成 | {time.time() - _ep_start:.1f}s")
+                return ep_content
+            except Exception as exc:
+                self._log(f"Writer：第{ep_num}集API失败，兜底 | {exc}")
+                return self._build_fallback_episode(
+                    ep_num, scenes_per_ep, request, outline, act_info, ep_reversal
+                )
+
+        results: dict[int, str] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(_generate_one, ep): ep for ep in range(1, episodes + 1)}
+            for future in as_completed(future_map):
+                ep_num = future_map[future]
+                try:
+                    results[ep_num] = future.result()
+                except Exception as exc:
+                    error_reason = f"第{ep_num}集异常：{exc}"
+                    api_mode = "api_multi_episode_partial_fallback"
+                    act_info = self._episode_act_info(ep_num, episodes, outline)
+                    ep_reversal = self._episode_reversal(ep_num, episodes, outline.reversals)
+                    results[ep_num] = self._build_fallback_episode(
+                        ep_num, scenes_per_ep, request, outline, act_info, ep_reversal
+                    )
+
+        gen_elapsed = time.time() - gen_start
+        self._log(f"Writer：全部{episodes}集正文生成完成 | 总耗时 {gen_elapsed:.1f}s")
+
+        self._log("Writer：正在为所有集生成集名...")
+        titles = self._batch_generate_episode_titles(results, episodes, request)
+        all_episodes = [(ep, titles.get(ep, f"第{ep}集"), results[ep]) for ep in range(1, episodes + 1)]
+
+        full_script = self._combine_episodes(all_episodes)
+        return ScriptDraft(
+            title=outline.title,
+            content=full_script,
+            metadata={
+                "styles": style_text,
+                "writing_tone": request.writing_tone,
+                "audience": request.audience,
+                "generation_mode": api_mode,
+                "episodes": str(episodes),
+                "scenes_per_episode": str(scenes_per_ep),
+                "revision_feedback": revision_feedback,
+                "error_reason": error_reason,
+            },
+        )
+
+    def _episode_act_info(self, ep_num: int, total_eps: int, outline: PlanOutline) -> str:
+        """根据集数位置确定当前集所处的幕次。"""
+        acts = outline.three_act_outline if isinstance(outline.three_act_outline, list) else []
+        act1_end = max(total_eps // 4, 1)
+        act3_start = total_eps - max(total_eps // 4, 1) + 1
+        if ep_num <= act1_end:
+            act = acts[0] if acts else {"act": "第一幕", "summary": "建立关系与危机"}
+        elif ep_num >= act3_start:
+            act = acts[2] if len(acts) > 2 else {"act": "第三幕", "summary": "高潮与结局"}
+        else:
+            act = acts[1] if len(acts) > 1 else {"act": "第二幕", "summary": "冲突升级与反转"}
+        act_name = act.get("act", "第二幕") if isinstance(act, dict) else "第二幕"
+        summary = act.get("summary", "冲突推进") if isinstance(act, dict) else str(act)
+        return f"{act_name}：{summary}"
+
+    def _episode_reversal(self, ep_num: int, total_eps: int, reversals) -> str:
+        """为当前集分配反转/情节点。"""
+        rev_list = reversals if isinstance(reversals, list) else ([reversals] if reversals else [])
+        if not rev_list:
+            return "推进冲突并制造一次反转"
+        idx = int((ep_num - 1) * len(rev_list) / max(total_eps, 1))
+        idx = min(idx, len(rev_list) - 1)
+        rev = rev_list[idx]
+        if isinstance(rev, dict):
+            return rev.get("summary", rev.get("content", "局势反转"))
+        return str(rev)
+
+    def _build_episode_plan(self, episodes: int, outline: PlanOutline) -> str:
+        """预生成各集剧情规划，替代 prev_summary 实现无依赖并行。"""
+        lines: list[str] = []
+        for ep in range(1, episodes + 1):
+            act_info = self._episode_act_info(ep, episodes, outline)
+            reversal = self._episode_reversal(ep, episodes, outline.reversals)
+            extra = ""
+            if ep == 1:
+                extra = f"（开场钩子：{outline.opening_hook[:40]}）"
+            elif ep == episodes:
+                extra = f"（结局收束：{outline.ending_hook[:40]}）"
+            lines.append(f"第{ep}集 [{act_info}] 反转：{reversal[:30]}{extra}")
+        return "\n".join(lines)
+
+    def _batch_generate_episode_titles(self, results: dict, episodes: int, request: UserRequest) -> dict:
+        """一次API调用为所有集批量生成集名，失败则走启发式提取。"""
+        summaries: list[str] = []
+        for ep in range(1, episodes + 1):
+            content = results.get(ep, "")
+            brief = content[:150].replace('\n', ' ')
+            summaries.append(f"第{ep}集：{brief}")
+        all_summaries = "\n".join(summaries)
+        try:
+            data = self.llm.complete_json(
+                system_prompt="你是短剧集名专家。根据每集摘要批量生成集名。只输出JSON。",
+                user_prompt=f"""主题：{request.theme}
+请为以下{episodes}集分别起一个集名：
+
+{all_summaries}
+
+要求：
+1. 每个集名3-10个字，可以是台词片段、悬念短句或情绪关键词
+2. 要勾起读者好奇心，暗示本集核心冲突或转折
+3. 不要加标点和书名号
+4. 只输出JSON：{{"titles": ["集名1", "集名2", ...]}}""",
+                required_fields=["titles"],
+                temperature=0.6,
+                max_tokens=min(episodes * 30 + 100, 2000),
+            )
+            title_list = data.get("titles", [])
+            if len(title_list) >= episodes:
+                titles = {}
+                for i in range(episodes):
+                    t = str(title_list[i]).strip().strip("《》\"'""''")
+                    titles[i + 1] = t if t else f"第{i + 1}集"
+                self._log(f"Writer：集名批量生成完成（API）")
+                return titles
+        except Exception:
+            pass
+        self._log("Writer：集名API失败，使用启发式提取")
+        return self._heuristic_episode_titles(results, episodes)
+
+    def _heuristic_episode_titles(self, results: dict, episodes: int) -> dict:
+        """从剧本台词/动作中提取集名，零API调用。"""
+        titles: dict[int, str] = {}
+        for ep in range(1, episodes + 1):
+            content = results.get(ep, "")
+            title = self._extract_title_from_content(content, ep)
+            titles[ep] = title
+        return titles
+
+    def _extract_title_from_content(self, content: str, ep_num: int) -> str:
+        """从单集内容中提取一个有吸引力的短语作为集名。"""
+        _META_STARTS = ('场景号', '内外景', '时间', '地点', '角色造型', '动作描述', '分镜提示', '对白')
+        for line in content.split('\n'):
+            stripped = line.strip()
+            if '：' not in stripped or stripped.startswith(_META_STARTS):
+                continue
+            parts = stripped.split('：', 1)
+            if len(parts) == 2:
+                text = parts[1].strip().rstrip('。！？，、；…—')
+                if 3 <= len(text) <= 12:
+                    return text
+        return f"第{ep_num}集"
+
+    def _combine_episodes(self, all_episodes: list) -> str:
+        """将所有集合并为完整剧本，添加集标题分隔。"""
+        parts: list[str] = []
+        for ep_num, ep_title, ep_content in all_episodes:
+            header = f"第{ep_num}集：{ep_title}"
+            parts.append(f"{header}\n\n{ep_content}")
+        return ("\n\n" + "=" * 40 + "\n\n").join(parts)
+
+    def _build_fallback_episode(self, ep_num: int, scenes_per_ep: int, request: UserRequest,
+                                outline: PlanOutline, act_info: str, ep_reversal: str) -> str:
+        """单集兜底模板。"""
+        keyword_text = "、".join(request.keywords[:3]) if request.keywords else request.theme[:8]
+        scenes: list[str] = []
+        for i in range(1, scenes_per_ep + 1):
+            scenes.append(f"""场景号：{i}
+内外景：内景
+时间：夜晚
+地点：主场景
+角色造型&情绪：主角，当前情绪紧绷，面对第{ep_num}集核心冲突。
+动作描述：围绕"{request.theme}"推进，{act_info}，完成反转"{ep_reversal}"。关键词：{keyword_text}。
+对白：
+主角（紧迫）：这一次，我不会再退。
+分镜提示：中景推近景，聚焦主角情绪爆发点。""")
+        return "\n\n".join(scenes)
+
+    # ===================== 多轮对话：场景级编辑 =====================
+
+    def edit_scene(self, edit_req: EditRequest) -> ScriptDraft:
+        """根据用户指令，只修改剧本中指定场景，保留其余场景不变。"""
+        scene_text = self._extract_scene(edit_req.original_script, edit_req.scene_number)
+        if not scene_text:
+            return ScriptDraft(
+                title=edit_req.title,
+                content=edit_req.original_script,
+                metadata={"generation_mode": "edit_no_scene_found", "error_reason": f"未找到场景{edit_req.scene_number}"},
+            )
+        history_text = ""
+        if edit_req.conversation_history:
+            history_text = "\n".join(
+                f"{'用户' if msg.get('role') == 'user' else 'AI'}：{msg.get('content', '')}"
+                for msg in edit_req.conversation_history[-6:]
+            )
+
+        style_text = ""
+        writing_tone = ""
+        if edit_req.request_meta:
+            style_text = "、".join(edit_req.request_meta.get("styles", []))
+            writing_tone = edit_req.request_meta.get("writing_tone", "")
+
+        system_prompt = "你是短剧编剧修改Agent。用户会指定要修改剧本中的某个场景，你只需要输出修改后的该场景完整内容，保持场景结构（场景号、内外景、时间、地点、角色造型&情绪、动作描述、对白、分镜提示）不变。不要输出其他场景，不要解释，不要Markdown。"
+
+        user_prompt = f"""请修改以下场景（场景{edit_req.scene_number}），按照用户指令调整内容。
+
+用户修改指令：{edit_req.instruction}
+
+当前场景内容：
+{scene_text}
+
+{f'对话上下文：{chr(10)}{history_text}' if history_text else ''}
+{f'风格要求：{style_text} / {writing_tone}' if style_text else ''}
+
+输出要求：
+1. 只输出修改后的场景{edit_req.scene_number}完整内容。
+2. 必须保持场景结构字段完整：场景号、内外景、时间、地点、角色造型&情绪、动作描述、对白、分镜提示。
+3. 根据用户指令重点修改对应部分，其余部分保持不变或适当微调以保持连贯。
+4. 不要输出其他场景，不要解释。"""
+
+        try:
+            edited_scene = self._normalize_api_script(
+                self.llm.complete(system_prompt, user_prompt, temperature=0.25, max_tokens=1200)
+            )
+            new_script = self._replace_scene(edit_req.original_script, edit_req.scene_number, edited_scene)
+            return ScriptDraft(
+                title=edit_req.title,
+                content=new_script,
+                metadata={"generation_mode": "scene_edit", "edited_scene": str(edit_req.scene_number)},
+            )
+        except Exception as exc:
+            return ScriptDraft(
+                title=edit_req.title,
+                content=edit_req.original_script,
+                metadata={"generation_mode": "scene_edit_failed", "error_reason": str(exc)},
+            )
+
+    def _extract_scene(self, script: str, scene_number: int) -> str:
+        """从完整剧本中提取指定场景号的文本块。"""
+        pattern = re.compile(
+            rf"(?:^|\n)\s*(?:【?场景\s*{scene_number}】?|场景号[:：]?\s*{scene_number})(?:\s|[:：]|$)"
+        )
+        match = pattern.search(script)
+        if not match:
+            return ""
+        start = match.start()
+        next_pattern = re.compile(
+            rf"(?:^|\n)\s*(?:【?场景\s*{scene_number + 1}】?|场景号[:：]?\s*{scene_number + 1})(?:\s|[:：]|$)"
+        )
+        next_match = next_pattern.search(script)
+        end = next_match.start() if next_match else len(script)
+        return script[start:end].strip()
+
+    def _replace_scene(self, script: str, scene_number: int, new_scene: str) -> str:
+        """将剧本中指定场景替换为新内容。"""
+        pattern = re.compile(
+            rf"(?:^|\n)\s*(?:【?场景\s*{scene_number}】?|场景号[:：]?\s*{scene_number})(?:\s|[:：]|$)"
+        )
+        match = pattern.search(script)
+        if not match:
+            return script
+        start = match.start()
+        next_pattern = re.compile(
+            rf"(?:^|\n)\s*(?:【?场景\s*{scene_number + 1}】?|场景号[:：]?\s*{scene_number + 1})(?:\s|[:：]|$)"
+        )
+        next_match = next_pattern.search(script)
+        end = next_match.start() if next_match else len(script)
+        prefix = script[:start].rstrip()
+        suffix = script[end:]
+        if prefix:
+            return f"{prefix}\n\n{new_scene.strip()}\n\n{suffix.strip()}".strip()
+        return f"{new_scene.strip()}\n\n{suffix.strip()}".strip()

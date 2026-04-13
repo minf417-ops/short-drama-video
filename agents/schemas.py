@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -43,3 +43,15 @@ class ReviewResult:
     feedback: str
     polished_script: str
     metadata: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class EditRequest:
+    """用户针对已生成剧本的某个场景发起的修改请求。"""
+    scene_number: int
+    instruction: str
+    original_script: str
+    title: str
+    outline: Optional[Dict[str, Any]] = None
+    request_meta: Optional[Dict[str, Any]] = None
+    conversation_history: List[Dict[str, str]] = field(default_factory=list)

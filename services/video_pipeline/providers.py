@@ -10,6 +10,7 @@ import pathlib
 import shutil
 import subprocess
 import time
+import zlib
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -371,10 +372,26 @@ class VolcTTSProvider(BaseTTSProvider):
         self.access_key = os.getenv("VOLC_TTS_ACCESS_KEY", "").strip()
         self.resource_id = os.getenv("VOLC_TTS_RESOURCE_ID", "volc.service_type.10029").strip()
         self.model = os.getenv("VOLC_TTS_MODEL", "seed-tts-2.0").strip()
-        self.voice = os.getenv("VOLC_TTS_VOICE", "").strip()
-        self.narrator_voice = os.getenv("VOLC_TTS_VOICE_NARRATOR", self.voice).strip()
-        self.male_lead_voice = os.getenv("VOLC_TTS_VOICE_MALE_LEAD", self.voice).strip()
-        self.female_lead_voice = os.getenv("VOLC_TTS_VOICE_FEMALE_LEAD", self.voice).strip()
+        self.voice = os.getenv("VOLC_TTS_VOICE", "zh_female_vv_uranus_bigtts").strip()
+        self.narrator_voice = os.getenv("VOLC_TTS_VOICE_NARRATOR", self.voice).strip() or self.voice
+        self.male_lead_voice = os.getenv("VOLC_TTS_VOICE_MALE_LEAD", "zh_male_m191_uranus_bigtts").strip() or self.voice
+        self.male_support_voice = os.getenv("VOLC_TTS_VOICE_MALE_SUPPORT", "zh_male_taocheng_uranus_bigtts").strip() or self.male_lead_voice
+        self.female_lead_voice = os.getenv("VOLC_TTS_VOICE_FEMALE_LEAD", "zh_female_xiaohe_uranus_bigtts").strip() or self.voice
+        self.female_support_voice = os.getenv("VOLC_TTS_VOICE_FEMALE_SUPPORT", "zh_female_vv_uranus_bigtts").strip() or self.female_lead_voice
+        self.legacy_narrator_voice = os.getenv("VOLC_TTS_VOICE_LEGACY_NARRATOR", "zh_female_shuangkuaisisi_moon_bigtts").strip()
+        self.legacy_female_voice = os.getenv("VOLC_TTS_VOICE_LEGACY_FEMALE", "zh_female_roumeinvyou_emo_v2_mars_bigtts").strip()
+        self.legacy_male_voice = os.getenv("VOLC_TTS_VOICE_LEGACY_MALE", "zh_male_M392_conversation_wvae_bigtts").strip()
+        self.voice_overrides = {
+            "narrator_warm": os.getenv("VOLC_TTS_VOICE_NARRATOR_WARM", self.narrator_voice).strip() or self.narrator_voice,
+            "narrator_cold": os.getenv("VOLC_TTS_VOICE_NARRATOR_COLD", self.narrator_voice).strip() or self.narrator_voice,
+            "female_cold": os.getenv("VOLC_TTS_VOICE_FEMALE_COLD", self.female_lead_voice).strip() or self.female_lead_voice,
+            "female_gentle": os.getenv("VOLC_TTS_VOICE_FEMALE_GENTLE", self.female_support_voice).strip() or self.female_support_voice,
+            "female_emotional": os.getenv("VOLC_TTS_VOICE_FEMALE_EMOTIONAL", self.legacy_female_voice).strip() or self.legacy_female_voice,
+            "male_cold": os.getenv("VOLC_TTS_VOICE_MALE_COLD", self.male_lead_voice).strip() or self.male_lead_voice,
+            "male_gentle": os.getenv("VOLC_TTS_VOICE_MALE_GENTLE", self.male_support_voice).strip() or self.male_support_voice,
+            "male_emotional": os.getenv("VOLC_TTS_VOICE_MALE_EMOTIONAL", self.legacy_male_voice).strip() or self.legacy_male_voice,
+            "youthful": os.getenv("VOLC_TTS_VOICE_YOUTHFUL", self.female_support_voice or self.male_support_voice).strip() or self.voice,
+        }
         self.encoding = os.getenv("VOLC_TTS_ENCODING", "mp3").strip()
         self.speed_ratio = float(os.getenv("VOLC_TTS_SPEED_RATIO", "1.0").strip() or "1.0")
         self.sample_rate = int(os.getenv("VOLC_TTS_SAMPLE_RATE", "24000").strip() or "24000")
@@ -384,11 +401,77 @@ class VolcTTSProvider(BaseTTSProvider):
         self.emotion_scale = int(os.getenv("VOLC_TTS_EMOTION_SCALE", "4").strip() or "4")
         self.enable_subtitle = os.getenv("VOLC_TTS_ENABLE_SUBTITLE", "0").strip().lower() in {"1", "true", "yes", "on"}
         self.silence_duration = int(os.getenv("VOLC_TTS_SILENCE_DURATION", "0").strip() or "0")
+        self.use_context_texts = os.getenv("VOLC_TTS_USE_CONTEXT_TEXTS", "1").strip().lower() in {"1", "true", "yes", "on"}
         self.compatible_fallback_voices = [
-            os.getenv("VOLC_TTS_VOICE_COMPAT_FEMALE", "zh_female_shuangkuaisisi_moon_bigtts").strip(),
-            os.getenv("VOLC_TTS_VOICE_COMPAT_EMO", "zh_female_roumeinvyou_emo_v2_mars_bigtts").strip(),
-            os.getenv("VOLC_TTS_VOICE_COMPAT_MALE", "zh_male_M392_conversation_wvae_bigtts").strip(),
+            os.getenv("VOLC_TTS_VOICE_COMPAT_FEMALE", "zh_female_xiaohe_uranus_bigtts").strip(),
+            os.getenv("VOLC_TTS_VOICE_COMPAT_EMO", "zh_female_vv_uranus_bigtts").strip(),
+            os.getenv("VOLC_TTS_VOICE_COMPAT_MALE", "zh_male_m191_uranus_bigtts").strip(),
+            "zh_female_shuangkuaisisi_moon_bigtts",
+            "zh_female_roumeinvyou_emo_v2_mars_bigtts",
+            "zh_male_M392_conversation_wvae_bigtts",
         ]
+        self._character_voice_map: dict[str, str] = {}
+        self._character_profiles: dict[str, dict] = {}
+        self.voice_overrides["elderly_male"] = os.getenv("VOLC_TTS_VOICE_ELDERLY_MALE", self.male_lead_voice).strip() or self.male_lead_voice
+        self.voice_overrides["elderly_female"] = os.getenv("VOLC_TTS_VOICE_ELDERLY_FEMALE", self.narrator_voice).strip() or self.narrator_voice
+        self.voice_overrides["child"] = os.getenv("VOLC_TTS_VOICE_CHILD", self.female_support_voice).strip() or self.voice
+
+    def set_character_profiles(self, characters) -> None:
+        """从 ScriptProject.characters 构建角色→音色的稳定映射，确保同一角色在所有场景中使用一致的声音。"""
+        self._character_voice_map = {}
+        self._character_profiles = {}
+        for char in characters:
+            name = getattr(char, "name", "")
+            if not name:
+                continue
+            gender = getattr(char, "gender", "unknown")
+            age_group = getattr(char, "age_group", "adult")
+            voice_style = getattr(char, "voice_style", "neutral")
+            temperament = getattr(char, "temperament", "")
+            speech_style = getattr(char, "speech_style", "")
+            identity = getattr(char, "identity", "")
+            self._character_profiles[name] = {
+                "gender": gender,
+                "age_group": age_group,
+                "voice_style": voice_style,
+                "temperament": temperament,
+                "speech_style": speech_style,
+                "identity": identity,
+            }
+            bucket = self._assign_voice_bucket_for_character(
+                name, gender, age_group, voice_style, temperament, speech_style
+            )
+            if bucket:
+                self._character_voice_map[name] = bucket
+
+    def _assign_voice_bucket_for_character(
+        self, name: str, gender: str, age_group: str, voice_style: str, temperament: str, speech_style: str
+    ) -> str:
+        """根据角色的性别、年龄、气质等属性分配音色桶（voice bucket）。"""
+        combined = " ".join(item for item in [voice_style, temperament, speech_style, name] if item)
+        if age_group in ("child", "teenager"):
+            return "child"
+        if age_group == "young_adult":
+            return "youthful"
+        if age_group == "elderly":
+            return "elderly_male" if gender == "male" else "elderly_female"
+        if gender == "female":
+            if any(w in combined for w in ["冷", "强势", "复仇", "锋利", "恨", "凌厉"]):
+                return "female_cold"
+            if any(w in combined for w in ["温柔", "善良", "温和", "治愈", "宠", "柔"]):
+                return "female_gentle"
+            if any(w in combined for w in ["情感", "感性", "哭", "脆弱", "敏感"]):
+                return "female_emotional"
+            return "female_lead"
+        if gender == "male":
+            if any(w in combined for w in ["冷", "威严", "强势", "肃杀", "命令", "霸道"]):
+                return "male_cold"
+            if any(w in combined for w in ["温柔", "守护", "温和", "克制", "安慰", "深情"]):
+                return "male_gentle"
+            if any(w in combined for w in ["情感", "感性", "隐忍", "脆弱", "敏感"]):
+                return "male_emotional"
+            return "male_lead"
+        return ""
 
     def synthesize(self, scene: Scene, shot: Shot, output_dir: str) -> AssetRecord:
         self._ensure_ready()
@@ -410,6 +493,8 @@ class VolcTTSProvider(BaseTTSProvider):
                 duration_seconds=duration,
                 metadata={"transcript": "", "raw_response": None},
             )
+        if len([line for line in lines if line.text.strip()]) > 1:
+            return self._synthesize_multi_speaker(scene, shot, lines, output_dir)
         audio_bytes, response_meta = self._request_tts(scene, shot, lines, tts_text)
         extension = ".wav" if self.encoding.lower() == "wav" else f".{self.encoding.lower()}"
         path = os.path.join(output_dir, f"{shot.shot_id}{extension}")
@@ -425,42 +510,291 @@ class VolcTTSProvider(BaseTTSProvider):
             file_path=path,
             prompt=tts_text,
             duration_seconds=duration,
-            metadata={"transcript": tts_text, "raw_response": response_meta},
+            metadata={
+                "transcript": tts_text,
+                "raw_response": response_meta,
+                "subtitle_events": self._build_single_speaker_subtitle_events(
+                    tts_text=tts_text,
+                    duration=duration,
+                    speaker=(lines[0].speaker.strip() if lines else shot.character_focus or ""),
+                    voice=response_meta.get("speaker", ""),
+                ),
+            },
         )
 
+    def _synthesize_multi_speaker(self, scene: Scene, shot: Shot, lines: list[DialogueLine], output_dir: str) -> AssetRecord:
+        extension = ".wav" if self.encoding.lower() == "wav" else f".{self.encoding.lower()}"
+        segment_paths: list[str] = []
+        raw_meta: list[dict] = []
+        transcript_parts: list[str] = []
+        subtitle_events: list[dict] = []
+        segment_offset = 0.0
+        for index, line in enumerate(lines, start=1):
+            text = line.text.strip()
+            if not text:
+                continue
+            inferred_gender = self._infer_line_gender(scene, line, shot)
+            single_shot = Shot(
+                shot_id=shot.shot_id,
+                scene_id=shot.scene_id,
+                index=shot.index,
+                duration_seconds=shot.duration_seconds,
+                visual_description=shot.visual_description,
+                viewpoint=shot.viewpoint,
+                camera=shot.camera,
+                framing=shot.framing,
+                camera_movement=shot.camera_movement,
+                lens_language=shot.lens_language,
+                shot_purpose=shot.shot_purpose,
+                transition=shot.transition,
+                emotion=shot.emotion,
+                expression=shot.expression,
+                body_action=shot.body_action,
+                scene_details=shot.scene_details,
+                character_focus=line.speaker.strip() or shot.character_focus,
+                character_identity=shot.character_identity,
+                speaker_gender=inferred_gender,
+                speaker_age_group=shot.speaker_age_group,
+                delivery_style=shot.delivery_style,
+                characters=shot.characters,
+                dialogue=[line],
+                narration="",
+                tts_text=text,
+                image_prompt=shot.image_prompt,
+                video_prompt=shot.video_prompt,
+            )
+            audio_bytes, response_meta = self._request_tts(scene, single_shot, [line], text)
+            segment_path = os.path.join(output_dir, f"{shot.shot_id}.seg{index}{extension}")
+            with open(segment_path, "wb") as file:
+                file.write(audio_bytes)
+            segment_paths.append(segment_path)
+            raw_meta.append(response_meta)
+            transcript_parts.append(text)
+            segment_duration = self._estimate_duration(segment_path, max(shot.duration_seconds / max(len(lines), 1), 0.8))
+            subtitle_events.append(
+                {
+                    "speaker": line.speaker.strip(),
+                    "text": self._normalize_subtitle_text(text),
+                    "start_seconds": segment_offset,
+                    "end_seconds": segment_offset + segment_duration,
+                    "duration_seconds": segment_duration,
+                    "voice": response_meta.get("speaker", ""),
+                    "gender": inferred_gender,
+                }
+            )
+            segment_offset += segment_duration
+        final_path = os.path.join(output_dir, f"{shot.shot_id}{extension}")
+        self._concat_audio_segments(segment_paths, final_path)
+        duration = self._estimate_duration(final_path, shot.duration_seconds)
+        for segment_path in segment_paths:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(segment_path)
+        transcript = " ".join(part for part in transcript_parts if part).strip()
+        return AssetRecord(
+            asset_id=f"audio-{shot.shot_id}",
+            asset_type="audio",
+            scene_id=shot.scene_id,
+            shot_id=shot.shot_id,
+            provider=self.provider_name,
+            file_path=final_path,
+            prompt=transcript,
+            duration_seconds=duration,
+            metadata={"transcript": transcript, "raw_response": raw_meta, "subtitle_events": subtitle_events},
+        )
+
+    def _build_single_speaker_subtitle_events(self, tts_text: str, duration: float, speaker: str, voice: str) -> list[dict]:
+        clean_text = self._normalize_subtitle_text(tts_text)
+        if not clean_text or duration <= 0:
+            return []
+        segments = self._split_subtitle_segments(clean_text)
+        if not segments:
+            segments = [clean_text]
+        total_weight = sum(max(len(segment.replace(" ", "")), 1) for segment in segments)
+        offset = 0.0
+        events: list[dict] = []
+        for index, segment in enumerate(segments, start=1):
+            weight = max(len(segment.replace(" ", "")), 1)
+            remaining = max(duration - offset, 0.12)
+            if index == len(segments):
+                segment_duration = remaining
+            else:
+                segment_duration = max(duration * (weight / total_weight), 0.2)
+                segment_duration = min(segment_duration, remaining)
+            end_seconds = min(offset + segment_duration, duration)
+            if end_seconds <= offset:
+                end_seconds = min(duration, offset + 0.12)
+            events.append(
+                {
+                    "speaker": speaker,
+                    "text": segment,
+                    "start_seconds": offset,
+                    "end_seconds": end_seconds,
+                    "duration_seconds": max(end_seconds - offset, 0.12),
+                    "voice": voice,
+                }
+            )
+            offset = end_seconds
+        return events
+
+    def _split_subtitle_segments(self, text: str) -> list[str]:
+        normalized = self._normalize_subtitle_text(text)
+        if not normalized:
+            return []
+        segments: list[str] = []
+        buffer = ""
+        for piece in re.split(r"([，。！？；,.!?])", normalized):
+            if not piece:
+                continue
+            if len(buffer) + len(piece) > 14 and buffer:
+                segments.append(buffer.strip())
+                buffer = piece
+            else:
+                buffer += piece
+        if buffer.strip():
+            segments.append(buffer.strip())
+        compact_segments = [segment for segment in segments if segment]
+        merged_segments: list[str] = []
+        leading_punctuation = "，。！？；,.!?"
+        for segment in compact_segments:
+            if merged_segments and segment and segment[0] in leading_punctuation:
+                merged_segments[-1] = f"{merged_segments[-1]}{segment[0]}"
+                remainder = segment[1:].strip()
+                if remainder:
+                    merged_segments.append(remainder)
+                continue
+            merged_segments.append(segment)
+        return merged_segments[:3] if merged_segments else []
+
+    def _normalize_subtitle_text(self, text: str) -> str:
+        normalized = re.sub(r"\s+", " ", (text or "").replace("\\", " ").strip())
+        return normalized.strip()
+
+    def _concat_audio_segments(self, segment_paths: list[str], output_path: str) -> None:
+        if len(segment_paths) == 1:
+            shutil.copyfile(segment_paths[0], output_path)
+            return
+        ffmpeg_binary = shutil.which(os.getenv("FFMPEG_BINARY", "ffmpeg"))
+        if not ffmpeg_binary:
+            raise RuntimeError("未找到 ffmpeg，无法拼接多角色 TTS 音频")
+        concat_path = f"{output_path}.concat.txt"
+        with open(concat_path, "w", encoding="utf-8") as file:
+            for segment_path in segment_paths:
+                normalized_path = segment_path.replace("\\", "/")
+                file.write(f"file '{normalized_path}'\n")
+        command = [
+            ffmpeg_binary,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_path,
+            "-vn",
+            "-ar",
+            str(self.sample_rate),
+            "-ac",
+            "1",
+            "-b:a",
+            str(self.bit_rate),
+            "-c:a",
+            "libmp3lame" if self.encoding.lower() == "mp3" else "pcm_s16le",
+            output_path,
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(concat_path)
+        if completed.returncode != 0:
+            raise RuntimeError(f"多角色 TTS 音频拼接失败：{completed.stderr}")
+
+    def _infer_line_gender(self, scene: Scene, line: DialogueLine, fallback_shot: Shot) -> str:
+        speaker_name = line.speaker.strip()
+        if speaker_name in self._character_profiles:
+            gender = self._character_profiles[speaker_name].get("gender", "")
+            if gender in ("male", "female"):
+                return gender
+        profile = getattr(scene, "character_profiles", {}).get(speaker_name, {}) if hasattr(scene, "character_profiles") else {}
+        if profile.get("gender"):
+            return str(profile["gender"])
+        if any(token in speaker_name for token in ["真人", "掌门", "宗主", "师尊", "长老", "君上", "尊上", "魔尊", "帝君", "公子", "少主", "师兄"]):
+            return "male"
+        if any(token in speaker_name for token in ["仙子", "圣女", "神女", "夫人", "小姐", "公主", "师姐"]):
+            return "female"
+        ordered_names = [name.strip() for name in getattr(scene, "characters", []) if isinstance(name, str) and name.strip()]
+        if ordered_names:
+            if line.speaker.strip() == ordered_names[0]:
+                return "female"
+            if len(ordered_names) > 1 and line.speaker.strip() == ordered_names[1]:
+                return "male"
+        return fallback_shot.speaker_gender
+
     def _request_tts(self, scene: Scene, shot: Shot, lines: list[DialogueLine], transcript: str) -> tuple[bytes, dict]:
-        selected_voice = self._select_voice(scene, shot, lines)
+        voice_plan = self._select_voice_plan(scene, shot, lines, transcript)
+        selected_voice = str(voice_plan["speaker"])
+        context_texts = list(voice_plan["context_texts"])
         fallback_voices: list[str | None] = []
-        for candidate in [selected_voice, self.voice, self.narrator_voice, *self.compatible_fallback_voices, None]:
+        legacy_voice = self._select_legacy_voice(scene, shot, lines)
+        for candidate in [selected_voice, legacy_voice, self.voice, self.narrator_voice, *self.compatible_fallback_voices, None]:
             if candidate not in fallback_voices:
                 fallback_voices.append(candidate)
         last_error: RuntimeError | None = None
-        for candidate in fallback_voices:
-            payload = self._build_tts_payload(transcript, candidate)
-            if not candidate:
-                payload["req_params"].pop("speaker")
-            try:
-                audio_bytes, response_meta = self._post_chunked_audio(self.url, payload, self._headers())
-                return audio_bytes, {**response_meta, "speaker": candidate or "default"}
-            except RuntimeError as error:
-                last_error = error
-            message = str(last_error).lower() if last_error else ""
-            if "mismatched" not in message and "speaker" not in message:
-                break
+        emotion_candidates: list[str | None] = []
+        for emotion_candidate in [voice_plan["emotion"], None]:
+            if emotion_candidate not in emotion_candidates:
+                emotion_candidates.append(emotion_candidate)
+        for emotion_candidate in emotion_candidates:
+            for candidate in fallback_voices:
+                payload = self._build_tts_payload(
+                    transcript,
+                    candidate,
+                    context_texts=context_texts,
+                    emotion=emotion_candidate,
+                    emotion_scale=int(voice_plan["emotion_scale"]),
+                    speech_rate=int(voice_plan["speech_rate"]),
+                )
+                if not candidate:
+                    payload["req_params"].pop("speaker")
+                try:
+                    audio_bytes, response_meta = self._post_chunked_audio(self.url, payload, self._headers())
+                    return audio_bytes, {
+                        **response_meta,
+                        "speaker": candidate or "default",
+                        "emotion": emotion_candidate,
+                        "emotion_scale": voice_plan["emotion_scale"],
+                        "speech_rate": voice_plan["speech_rate"],
+                        "voice_bucket": voice_plan["voice_bucket"],
+                    }
+                except RuntimeError as error:
+                    last_error = error
+                message = str(last_error).lower() if last_error else ""
+                if not any(keyword in message for keyword in ["mismatched", "speaker", "emotion", "invalid"]):
+                    break
         if last_error:
             raise last_error
         raise RuntimeError("TTS 请求失败，未获取到有效音频")
 
-    def _build_tts_payload(self, transcript: str, speaker: str | None) -> dict:
+    def _build_tts_payload(
+        self,
+        transcript: str,
+        speaker: str | None,
+        context_texts: list[str] | None = None,
+        emotion: str | None = None,
+        emotion_scale: int | None = None,
+        speech_rate: int | None = None,
+    ) -> dict:
         audio_params: dict[str, object] = {
             "format": self.encoding,
             "sample_rate": self.sample_rate,
+            "speech_rate": self._speech_rate_value() if speech_rate is None else speech_rate,
+            "loudness_rate": self.loudness_rate,
         }
         if self.encoding.lower() == "mp3":
             audio_params["bit_rate"] = self.bit_rate
-        if self.emotion:
-            audio_params["emotion"] = self.emotion
-            audio_params["emotion_scale"] = self.emotion_scale
+        chosen_emotion = emotion if emotion is not None else self.emotion
+        chosen_scale = emotion_scale if emotion_scale is not None else self.emotion_scale
+        if chosen_emotion:
+            audio_params["emotion"] = chosen_emotion
+            audio_params["emotion_scale"] = chosen_scale
         payload = {
             "user": {
                 "uid": str(uuid.uuid4()),
@@ -469,8 +803,18 @@ class VolcTTSProvider(BaseTTSProvider):
                 "text": transcript,
                 "speaker": speaker,
                 "audio_params": audio_params,
+                "additions": json.dumps(
+                    {
+                        "silence_duration": self.silence_duration,
+                    },
+                    ensure_ascii=False,
+                ),
             },
         }
+        if self.enable_subtitle:
+            audio_params["enable_subtitle"] = True
+        if context_texts and self.use_context_texts:
+            payload["req_params"]["context_texts"] = context_texts[:1]
         return payload
 
     def _speech_rate_value(self) -> int:
@@ -478,6 +822,100 @@ class VolcTTSProvider(BaseTTSProvider):
             return 0
         speech_rate = round((self.speed_ratio - 1.0) * 100)
         return max(-50, min(100, speech_rate))
+
+    def _select_voice_plan(self, scene: Scene, shot: Shot, lines: list[DialogueLine], transcript: str) -> dict[str, object]:
+        voice_bucket = self._resolve_voice_bucket(scene, shot, lines, transcript)
+        emotion, emotion_scale = self._resolve_emotion(scene, shot, transcript)
+        speech_rate = self._resolve_speech_rate(shot, transcript)
+        context_texts = self._build_context_texts(scene, shot, lines, transcript)
+        return {
+            "speaker": self._voice_from_bucket(voice_bucket),
+            "voice_bucket": voice_bucket,
+            "emotion": emotion,
+            "emotion_scale": emotion_scale,
+            "speech_rate": speech_rate,
+            "context_texts": context_texts,
+        }
+
+    def _resolve_voice_bucket(self, scene: Scene, shot: Shot, lines: list[DialogueLine], transcript: str) -> str:
+        speakers = [line.speaker.strip() for line in lines if line.speaker.strip()]
+        first_speaker = speakers[0] if speakers else ""
+        combined = " ".join(
+            item
+            for item in [
+                first_speaker,
+                transcript,
+                shot.delivery_style,
+                shot.emotion,
+                shot.character_identity,
+                scene.mood,
+            ]
+            if item
+        )
+        if first_speaker and any(tag in first_speaker for tag in ["旁白", "画外音", "OS"]):
+            if any(word in combined for word in ["温柔", "安抚", "回忆", "治愈"]):
+                return "narrator_warm"
+            return "narrator_cold"
+        if first_speaker and first_speaker in self._character_voice_map:
+            base_bucket = self._character_voice_map[first_speaker]
+            if any(word in combined for word in ["哭", "哽咽", "绝望", "崩溃", "委屈", "心碎"]):
+                profile = self._character_profiles.get(first_speaker, {})
+                if profile.get("gender") == "male" or shot.speaker_gender == "male":
+                    return "male_emotional"
+                return "female_emotional"
+            return base_bucket
+        if shot.speaker_age_group == "young_adult" and any(word in combined for word in ["少女", "少年", "学生", "活泼", "俏皮", "年轻"]):
+            return "youthful"
+        if shot.speaker_gender == "female":
+            if any(word in combined for word in ["哭", "哽咽", "绝望", "崩溃", "委屈", "心碎"]):
+                return "female_emotional"
+            if any(word in combined for word in ["温柔", "安抚", "轻声", "宠", "治愈"]):
+                return "female_gentle"
+            if any(word in combined for word in ["冷", "恨", "压迫", "复仇", "质问", "锋利", "强势"]):
+                return "female_cold"
+        if shot.speaker_gender == "male":
+            if any(word in combined for word in ["哭", "隐忍", "崩溃", "脆弱", "哽咽", "求你"]):
+                return "male_emotional"
+            if any(word in combined for word in ["温柔", "安抚", "守护", "轻声", "克制安慰"]):
+                return "male_gentle"
+            if any(word in combined for word in ["冷", "威压", "压迫", "复仇", "质问", "命令", "肃杀"]):
+                return "male_cold"
+        return self._select_voice(scene, shot, lines)
+
+    def _voice_from_bucket(self, bucket: str) -> str:
+        override = self.voice_overrides.get(bucket, "").strip()
+        if override:
+            return override
+        return bucket
+
+    def _resolve_emotion(self, scene: Scene, shot: Shot, transcript: str) -> tuple[str | None, int]:
+        combined = " ".join(item for item in [scene.mood, shot.emotion, shot.delivery_style, transcript] if item)
+        if self.emotion:
+            return self.emotion, self.emotion_scale
+        if any(word in combined for word in ["哽咽", "哭", "别走", "求你", "绝望", "崩溃"]):
+            return "sad", 7
+        if any(word in combined for word in ["你敢", "闭嘴", "凭什么", "住手", "复仇", "恨", "质问", "怒"]):
+            return "angry", 7
+        if any(word in combined for word in ["开心", "高兴", "笑", "喜悦", "幸福", "激动", "兴奋", "太好了"]):
+            return "happy", 5
+        if any(word in combined for word in ["害怕", "恐惧", "颤抖", "惊恐", "吓", "不寒而栗"]):
+            return "scare", 6
+        if any(word in combined for word in ["惊讶", "震惊", "不敢相信", "怎么可能", "不可能"]):
+            return "surprise", 5
+        if any(word in combined for word in ["温柔", "安抚", "喜欢", "等你", "原谅", "心动"]):
+            return "gentle", 5
+        if any(word in combined for word in ["悬疑", "夜", "压抑", "冷", "真相", "克制"]):
+            return "serious", 4
+        return None, self.emotion_scale
+
+    def _resolve_speech_rate(self, shot: Shot, transcript: str) -> int:
+        base_rate = self._speech_rate_value()
+        combined = " ".join(item for item in [shot.delivery_style, shot.emotion, transcript] if item)
+        if any(word in combined for word in ["崩溃", "慌", "快说", "马上", "快跑", "快点"]):
+            return max(-50, min(100, base_rate + 12))
+        if any(word in combined for word in ["压抑", "克制", "沉默", "低沉", "慢慢", "轻声"]):
+            return max(-50, min(100, base_rate - 8))
+        return base_rate
 
     def _select_voice(self, scene: Scene, shot: Shot, lines: list[DialogueLine]) -> str:
         speakers = [line.speaker.strip() for line in lines if line.speaker.strip()]
@@ -491,10 +929,14 @@ class VolcTTSProvider(BaseTTSProvider):
             return self.female_lead_voice or self.voice or self.narrator_voice
         if voice_style == "male_lead":
             return self.male_lead_voice or self.voice or self.narrator_voice
+        if voice_style == "female_support":
+            return self.female_support_voice or self.female_lead_voice or self.voice or self.narrator_voice
+        if voice_style == "male_support":
+            return self.male_support_voice or self.male_lead_voice or self.voice or self.narrator_voice
         if shot.speaker_gender == "female":
-            return self.female_lead_voice or self.voice or self.narrator_voice
+            return self.female_support_voice or self.female_lead_voice or self.voice or self.narrator_voice
         if shot.speaker_gender == "male":
-            return self.male_lead_voice or self.voice or self.narrator_voice
+            return self.male_support_voice or self.male_lead_voice or self.voice or self.narrator_voice
         female_keywords = ["女主", "女", "姐", "妹", "母", "妈", "嫂", "婶", "姑", "娘", "妃", "后", "公主", "夫人", "小姐"]
         male_keywords = ["男主", "男", "哥", "弟", "父", "爸", "叔", "伯", "爷", "王", "帝", "太子", "少爷", "先生"]
         for kw in female_keywords:
@@ -532,9 +974,9 @@ class VolcTTSProvider(BaseTTSProvider):
             ]
             if item
         )
-        if any(keyword in combined for keyword in ["小姐", "夫人", "公主", "母亲", "新娘", "姐姐", "闺蜜"]):
+        if any(keyword in combined for keyword in ["小姐", "夫人", "公主", "母亲", "新娘", "姐姐", "闺蜜", "仙子", "圣女", "师姐"]):
             return "female_lead"
-        if any(keyword in combined for keyword in ["先生", "少爷", "总裁", "父亲", "新郎", "哥哥", "老板"]):
+        if any(keyword in combined for keyword in ["先生", "少爷", "总裁", "父亲", "新郎", "哥哥", "老板", "真人", "掌门", "宗主", "师尊", "长老", "魔尊", "帝君", "少主", "师兄"]):
             return "male_lead"
         if any(marker in normalized for marker in female_markers):
             return "female_lead"
@@ -546,7 +988,49 @@ class VolcTTSProvider(BaseTTSProvider):
                 return "female_lead"
             if len(ordered_names) > 1 and normalized == ordered_names[1]:
                 return "male_lead"
+        if scene_profile.get("gender") == "female":
+            return "female_support"
+        if scene_profile.get("gender") == "male":
+            return "male_support"
         return ""
+
+    def _build_context_texts(self, scene: Scene, shot: Shot, lines: list[DialogueLine], transcript: str) -> list[str]:
+        if not transcript.strip():
+            return []
+        speaker = lines[0].speaker.strip() if lines else shot.character_focus.strip()
+        mood_bits = [bit for bit in [shot.emotion, shot.delivery_style, shot.expression, scene.mood] if bit]
+        mood_hint = "、".join(dict.fromkeys(mood_bits))[:48] or "自然克制"
+        identity_hint = shot.character_identity or "剧情关键人物"
+        if speaker in self._character_profiles:
+            cp = self._character_profiles[speaker]
+            if cp.get("speech_style") and cp["speech_style"] != "自然克制":
+                mood_hint = f"{cp['speech_style']}，{mood_hint}" if mood_hint != "自然克制" else cp["speech_style"]
+            if not shot.character_identity and cp.get("identity"):
+                identity_hint = cp["identity"]
+        if speaker and speaker not in {"旁白", "画外音", "OS"}:
+            return [
+                f"请用符合{speaker}这一{identity_hint}身份的语气说这句台词，整体状态是{mood_hint}，"
+                "保持短剧表演感，吐字清楚，停顿自然，不要播音腔，情绪推进要跟镜头冲突和人物关系一致。"
+            ]
+        return [f"请用{mood_hint}的语气自然讲述，保持短剧旁白感，吐字清楚，情绪连贯，像在带观众进入剧情。"]
+
+    def _select_legacy_voice(self, scene: Scene, shot: Shot, lines: list[DialogueLine]) -> str:
+        speakers = [line.speaker.strip() for line in lines if line.speaker.strip()]
+        if not speakers:
+            return self.legacy_narrator_voice
+        first_speaker = speakers[0]
+        if "旁白" in first_speaker or "画外音" in first_speaker or "OS" in first_speaker:
+            return self.legacy_narrator_voice
+        voice_style = self._character_voice_style(scene, shot, first_speaker)
+        if voice_style in {"male_lead", "male_support"}:
+            return self.legacy_male_voice
+        if voice_style in {"female_lead", "female_support"}:
+            return self.legacy_female_voice
+        if shot.speaker_gender == "male":
+            return self.legacy_male_voice
+        if shot.speaker_gender == "female":
+            return self.legacy_female_voice
+        return self.legacy_narrator_voice
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -642,6 +1126,8 @@ class VolcTTSProvider(BaseTTSProvider):
         if audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE":
             return True
         if audio_bytes[:3] == b"ID3":
+            return True
+        if len(audio_bytes) >= 2 and audio_bytes[0] == 0xFF and (audio_bytes[1] & 0xE0) == 0xE0:
             return True
         return False
 
@@ -947,7 +1433,8 @@ class FFmpegVideoProvider(BaseVideoProvider):
     def _build_motion_filter(self, shot: Shot, duration: float) -> str:
         fps = 25
         total_frames = max(int(duration * fps), 1)
-        base = "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
+        width, height = self._target_frame_size()
+        base = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1"
         movement = shot.camera_movement
         if "环绕" in movement:
             motion = f"zoompan=z='min(1.14,1.0+on/{max(total_frames,1)}*0.14)':x='iw/2-(iw/zoom/2)+sin(on/10)*18':y='ih/2-(ih/zoom/2)+cos(on/12)*12':d={total_frames}:s=1080x1920:fps={fps}"
@@ -962,6 +1449,14 @@ class FFmpegVideoProvider(BaseVideoProvider):
         fade_out_start = max(duration - 0.22, 0)
         fade = f"fade=t=in:st=0:d=0.18,fade=t=out:st={fade_out_start:.3f}:d=0.18"
         return f"{base},{motion},{fade},format=yuv420p"
+
+    def _target_frame_size(self) -> tuple[int, int]:
+        resolution = os.getenv("VIDEO_OUTPUT_RESOLUTION", "1440x1080").strip()
+        try:
+            width_text, height_text = resolution.lower().split("x", 1)
+            return max(int(width_text), 1), max(int(height_text), 1)
+        except Exception:
+            return 1440, 1080
 
 
 class JimengVideoProvider(BaseVideoProvider):
@@ -983,10 +1478,23 @@ class JimengVideoProvider(BaseVideoProvider):
     def render(self, shot: Shot, image_asset: AssetRecord, audio_asset: AssetRecord, output_dir: str, target_duration: float | None = None) -> AssetRecord:
         self._ensure_ready()
         os.makedirs(output_dir, exist_ok=True)
-        prompt = (shot.video_prompt or shot.visual_description or shot.image_prompt).strip()
-        if len(prompt) > 800:
-            prompt = prompt[:800]
+        prompt = self._build_optimized_video_prompt(shot)
         payload = {"req_key": self.req_key, "prompt": prompt}
+        frames_env = os.getenv("VOLC_VIDEO_FRAMES", "").strip()
+        if frames_env:
+            frames_int = int(frames_env)
+        else:
+            audio_dur = audio_asset.duration_seconds if audio_asset else 5.0
+            frames_int = 241 if audio_dur > 5.5 else 121
+        aspect_ratio_value = os.getenv("VOLC_VIDEO_ASPECT_RATIO", "").strip()
+        if not aspect_ratio_value:
+            aspect_ratio_value = os.getenv("VIDEO_OUTPUT_RATIO", "16:9").strip()
+        seed_value = os.getenv("VOLC_VIDEO_SEED", "").strip()
+        payload["frames"] = frames_int
+        payload["aspect_ratio"] = aspect_ratio_value
+        resolved_seed = self._resolve_seed(shot, seed_value)
+        if resolved_seed is not None:
+            payload["seed"] = resolved_seed
         response, query_log = self._post_visual_sdk(payload)
         video_bytes, source_url = self._extract_video_bytes(response)
         source_path = os.path.join(output_dir, f"{shot.shot_id}.source.mp4")
@@ -1009,8 +1517,58 @@ class JimengVideoProvider(BaseVideoProvider):
                 "query_log": query_log,
                 "source_video_url": source_url,
                 "source_video_path": source_path,
+                "seed": resolved_seed,
             },
         )
+
+    def _build_optimized_video_prompt(self, shot: Shot) -> str:
+        base_prompt = (shot.video_prompt or shot.visual_description or shot.image_prompt).strip()
+        ratio = os.getenv("VIDEO_OUTPUT_RATIO", "16:9").strip()
+        focus = shot.character_focus or "主角"
+        identity = shot.character_identity or "剧情关键人物"
+        if shot.tts_text:
+            dialogue_text = shot.tts_text.strip()[:60]
+            char_count = len(dialogue_text)
+            if char_count <= 6:
+                rhythm_hint = "短句，嘴部快速开合一次后闭合"
+            elif char_count <= 15:
+                rhythm_hint = "中等语句，嘴部随每个字自然开合，节奏均匀"
+            else:
+                rhythm_hint = "长句，嘴部持续开合，语速自然流畅"
+            compact_parts = [
+                f"{ratio}短剧电影镜头，{focus}（{identity}）正在开口说话。",
+                f"从视频第一帧起{focus}就在说话，嘴部清晰地说出：「{dialogue_text}」，说话贯穿整个视频时长。",
+                f"口型要求：{rhythm_hint}，嘴唇开合幅度与中文发音匹配，下巴随语句自然活动。",
+                f"景别{shot.framing}，视角{shot.viewpoint}，运镜{shot.camera_movement}。",
+                f"情绪{shot.emotion}，{shot.expression or '表情自然，嘴部随台词节奏清晰开合'}。",
+                f"仅一人说话，不要多人同时张嘴，角色造型与前一镜头一致，不要突然换脸换装。",
+            ]
+        else:
+            compact_parts = [
+                f"{ratio}短剧电影镜头，焦点人物{focus}，身份{identity}。",
+                f"景别{shot.framing}，视角{shot.viewpoint}，运镜{shot.camera_movement}，转场{shot.transition}。",
+                f"情绪{shot.emotion}，表情{shot.expression or '克制'}，动作{shot.body_action or '轻微动作'}。",
+                "要求角色造型与前一镜头保持一致，动作克制自然，不要突然换脸换装。",
+            ]
+        compact_prompt = "".join(part for part in compact_parts if part)
+        candidate = compact_prompt if len(compact_prompt) >= 120 else base_prompt
+        return candidate[:600] if len(candidate) > 600 else candidate
+
+    def _resolve_seed(self, shot: Shot, seed_value: str) -> int | None:
+        if seed_value:
+            parsed = int(seed_value)
+            if parsed >= 0:
+                return parsed
+        seed_source = "|".join(
+            [
+                shot.scene_id.strip(),
+                shot.character_focus.strip(),
+                shot.character_identity.strip(),
+            ]
+        )
+        if not seed_source.strip("|"):
+            return None
+        return zlib.crc32(seed_source.encode("utf-8")) % 2147483647
 
     def _ensure_ready(self) -> None:
         if not self.access_key_id or not self.secret_access_key:
@@ -1195,26 +1753,72 @@ class JimengVideoProvider(BaseVideoProvider):
             return False
 
     def _mux_audio(self, source_video_path: str, audio_path: str, output_path: str, duration: float) -> float:
+        width, height = self._target_frame_size()
+        source_duration = self._estimate_media_duration(source_video_path, duration)
+        speed_factor = source_duration / duration if duration > 0.1 else 1.0
+        max_speed = float(os.getenv("VOLC_VIDEO_MAX_SPEED", "2.5").strip() or "2.5")
+        speed_factor = min(max(speed_factor, 0.5), max_speed)
+        base_filter = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},setsar=1"
+        if speed_factor > 1.05:
+            video_filter = f"{base_filter},setpts=PTS/{speed_factor:.4f},fps=25,format=yuv420p"
+        elif speed_factor < 0.95:
+            pad_duration = max(duration - source_duration, 0.0)
+            video_filter = f"{base_filter},fps=25"
+            if pad_duration > 0.01:
+                video_filter = f"{video_filter},tpad=stop_mode=clone:stop_duration={pad_duration:.3f}"
+            video_filter = f"{video_filter},format=yuv420p"
+        else:
+            video_filter = f"{base_filter},fps=25,format=yuv420p"
         command = [
             self.ffmpeg_binary,
             "-y",
-            "-stream_loop", "-1", "-i", source_video_path,
+            "-i", source_video_path,
             "-i", audio_path,
             "-t", f"{duration:.3f}",
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1,fps=25,format=yuv420p",
+            "-vf", video_filter,
             "-af", f"atrim=0:{duration:.3f},asetpts=N/SR/TB,aresample=async=1:first_pts=0",
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-c:a", "aac",
-            "-shortest",
             output_path,
         ]
         completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore")
         if completed.returncode != 0:
             raise RuntimeError(f"即梦视频音画合成失败：{completed.stderr}")
         return duration
+
+    def _estimate_media_duration(self, file_path: str, fallback: float) -> float:
+        ffprobe_binary = shutil.which("ffprobe")
+        if ffprobe_binary:
+            command = [
+                ffprobe_binary,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                file_path,
+            ]
+            completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+            if completed.returncode == 0:
+                try:
+                    duration = float((completed.stdout or "").strip())
+                    if duration > 0:
+                        return duration
+                except ValueError:
+                    pass
+        return fallback
+
+    def _target_frame_size(self) -> tuple[int, int]:
+        resolution = os.getenv("VIDEO_OUTPUT_RESOLUTION", "1440x1080").strip()
+        try:
+            width_text, height_text = resolution.lower().split("x", 1)
+            return max(int(width_text), 1), max(int(height_text), 1)
+        except Exception:
+            return 1440, 1080
 
     @contextlib.contextmanager
     def _without_proxy(self):

@@ -9,7 +9,7 @@ from .models import CharacterProfile, DialogueLine, Scene, ScriptProject, Shot
 class ScriptParser:
     def parse(self, title: str, theme: str, script_text: str, ratio: str = "9:16", resolution: str = "1080x1920") -> ScriptProject:
         scenes = self._parse_scenes(script_text)
-        characters = self._collect_characters(scenes)
+        characters = self._collect_characters(scenes, theme)
         self._apply_character_consistency(scenes, characters, theme)
         project_id = self._slugify(title)
         return ScriptProject(
@@ -26,7 +26,7 @@ class ScriptParser:
 
     def _parse_scenes(self, script_text: str) -> list[Scene]:
         normalized = script_text.replace("\r\n", "\n").replace("\r", "\n").strip()
-        matches = list(re.finditer(r"(?:^|\n)\s*(?:【)?场景(?:号)?\s*[：:]?\s*(\d+)(?:】)?[^\n]*", normalized, flags=re.MULTILINE))
+        matches = list(re.finditer(r"(?m)^\s*(?:【场景\s*(\d+)】|场景\s*(\d+))\s*$", normalized))
         scenes: list[Scene] = []
         if not matches:
             return [self._build_scene("scene-1", 1, "场景1", normalized)]
@@ -46,9 +46,10 @@ class ScriptParser:
         characters: OrderedDict[str, None] = OrderedDict()
         label_map: OrderedDict[str, str] = OrderedDict()
         for line in body_lines:
-            dialogue_match = re.match(r"^([\u4e00-\u9fa5A-Za-z0-9_·&＆]+)[：:](.+)$", line)
+            dialogue_match = re.match(r"^([\u4e00-\u9fa5A-Za-z0-9_·&＆（）()，、\s]+)[：:](.+)$", line)
             if dialogue_match:
                 speaker = dialogue_match.group(1).strip()
+                speaker = self._clean_speaker_name(speaker)
                 text = dialogue_match.group(2).strip()
                 if self._is_meta_label(speaker):
                     label_map[speaker] = text
@@ -101,20 +102,25 @@ class ScriptParser:
     ) -> list[Shot]:
         shots: list[Shot] = []
         description_segments = self._split_summary_segments(summary)
-        movement_plan = ["缓慢推进", "横向平移跟随", "近景轻微环绕", "手持逼近", "快速变焦压迫"]
+        movement_plan = ["缓慢推进", "轻微横移跟随", "稳定近景轻移", "慢速压近", "停驻收束"]
         framing_plan = ["大全景", "中景双人构图", "近景单人构图", "特写", "情绪特写"]
         camera_plan = ["建立镜头", "关系镜头", "情绪推进镜头", "冲突镜头", "收束镜头"]
         viewpoint_plan = ["环境观察视角", "人物对位视角", "角色主观压迫视角", "近身对峙视角", "收束凝视视角"]
         lens_language_plan = ["前景遮挡建立空间层次", "通过对切强化人物关系", "利用浅景深锁定焦点情绪", "通过压缩空间制造冲突压迫", "以停顿和定格形成尾钩"]
         shot_purpose_plan = ["交代时空与人物站位", "建立人物关系与情绪落差", "推进角色内心变化", "放大冲突并制造戏剧爆点", "收束信息并抛出悬念"]
         transition_plan = ["淡入", "切入", "硬切", "动作切", "叠化收尾"]
-        total_shots = min(max(len(description_segments), 1) + min(len(dialogue), 2), 5)
+        if dialogue:
+            spoken_lines = [line for line in dialogue if line.text.strip()]
+            total_shots = min(max(len(spoken_lines), 1), 6)
+        else:
+            total_shots = min(max(len(description_segments), 1), 3)
+        dialogue_groups = self._chunk_dialogue(dialogue, total_shots)
         for index in range(total_shots):
-            dialogue_slice = dialogue[index:index + 1] if index < len(dialogue) else []
+            dialogue_slice = dialogue_groups[index] if index < len(dialogue_groups) else []
             segment = description_segments[min(index, len(description_segments) - 1)] if description_segments else summary
             focal_character = dialogue_slice[0].speaker if dialogue_slice else (characters[min(index, len(characters) - 1)] if characters else "主角")
             visual_description = segment.replace("：", "，")
-            expression = self._derive_expression(dialogue_slice[0].text if dialogue_slice else visual_description, scene_mood)
+            expression = self._derive_expression(dialogue_slice[0].text if dialogue_slice else visual_description, scene_mood, has_dialogue=bool(dialogue_slice))
             body_action = self._derive_body_action(visual_description, index)
             shot_id = f"{scene_id}-shot-{index + 1}"
             narration = self._build_narration(index, total_shots, dialogue_slice, visual_description, scene_mood)
@@ -122,20 +128,36 @@ class ScriptParser:
             speaker_age_group = self._infer_age_group(focal_character, visual_description)
             delivery_style = self._derive_delivery_style(dialogue_slice[0].text if dialogue_slice else visual_description, scene_mood, speaker_age_group)
             tts_text = self._build_tts_text(dialogue_slice, delivery_style)
+            if dialogue_slice:
+                camera = ["对白建立镜头", "稳定人物镜头", "近景人物镜头", "情绪对话镜头", "反应特写镜头", "收束人物镜头"][min(index, 5)]
+                framing = ["中景单人构图", "中近景双人构图", "近景单人构图", "近景对话反打", "情绪特写", "收束特写"][min(index, 5)]
+                viewpoint = ["人物平视视角", "人物对位视角", "近身平视视角", "肩后反打视角", "人物凝视视角", "收束凝视视角"][min(index, 5)]
+                camera_movement = ["固定镜头", "缓慢推进", "轻微横移", "固定近景", "慢速压近", "轻微收束"][min(index, 5)]
+                lens_language = ["保持构图稳定并突出说话主体", "用轻推强化情绪变化", "用稳定景别承接对白节奏", "用反打保持视线连续", "锁定嘴部与眼神细节", "以停顿收束尾钩"][min(index, 5)]
+                transition = "淡入" if index == 0 else ("叠化收尾" if index == total_shots - 1 else "切入")
+                duration_seconds = 2.4 if index < total_shots - 1 else 3.0
+            else:
+                camera = camera_plan[min(index, len(camera_plan) - 1)]
+                framing = framing_plan[min(index, len(framing_plan) - 1)]
+                viewpoint = viewpoint_plan[min(index, len(viewpoint_plan) - 1)]
+                camera_movement = movement_plan[min(index, len(movement_plan) - 1)]
+                lens_language = lens_language_plan[min(index, len(lens_language_plan) - 1)]
+                transition = transition_plan[min(index, len(transition_plan) - 1)]
+                duration_seconds = 3.0 if index < total_shots - 1 else 3.8
             shots.append(
                 Shot(
                     shot_id=shot_id,
                     scene_id=scene_id,
                     index=index + 1,
-                    duration_seconds=3.2 if index < total_shots - 1 else 4.2,
+                    duration_seconds=duration_seconds,
                     visual_description=visual_description,
-                    viewpoint=viewpoint_plan[min(index, len(viewpoint_plan) - 1)],
-                    camera=camera_plan[min(index, len(camera_plan) - 1)],
-                    framing=framing_plan[min(index, len(framing_plan) - 1)],
-                    camera_movement=movement_plan[min(index, len(movement_plan) - 1)],
-                    lens_language=lens_language_plan[min(index, len(lens_language_plan) - 1)],
+                    viewpoint=viewpoint,
+                    camera=camera,
+                    framing=framing,
+                    camera_movement=camera_movement,
+                    lens_language=lens_language,
                     shot_purpose=shot_purpose_plan[min(index, len(shot_purpose_plan) - 1)],
-                    transition=transition_plan[min(index, len(transition_plan) - 1)],
+                    transition=transition,
                     emotion=self._derive_emotion(dialogue_slice[0].text if dialogue_slice else visual_description, scene_mood),
                     expression=expression,
                     body_action=body_action,
@@ -154,6 +176,22 @@ class ScriptParser:
                 )
             )
         return shots
+
+    def _chunk_dialogue(self, dialogue: list[DialogueLine], total_shots: int) -> list[list[DialogueLine]]:
+        if total_shots <= 0:
+            return []
+        if not dialogue:
+            return [[] for _ in range(total_shots)]
+        if len(dialogue) <= total_shots:
+            chunks = [[line] for line in dialogue]
+            while len(chunks) < total_shots:
+                chunks.append([])
+            return chunks[:total_shots]
+        chunk_size = max((len(dialogue) + total_shots - 1) // total_shots, 1)
+        chunks = [dialogue[index:index + chunk_size] for index in range(0, len(dialogue), chunk_size)]
+        while len(chunks) < total_shots:
+            chunks.append([])
+        return chunks[:total_shots]
 
     def _build_tts_text(self, dialogue_slice: list[DialogueLine], delivery_style: str = "自然克制") -> str:
         if not dialogue_slice:
@@ -199,7 +237,7 @@ class ScriptParser:
         matches = list(re.finditer(r"([\u4e00-\u9fa5A-Za-z0-9_\u00b7\uff08\uff09()\uff0c\u3001\uff1b\s]+?)[\uff1a:][\u201c\u201d\"]?(.+?)(?=(?:\s+[\u4e00-\u9fa5A-Za-z0-9_\u00b7\uff08\uff09()\uff0c\u3001\uff1b\s]+?[\uff1a:])|$)", normalized))
         parsed: list[DialogueLine] = []
         for match in matches:
-            speaker = re.sub(r"[（(].*?[）)]", "", match.group(1)).strip()
+            speaker = self._clean_speaker_name(match.group(1).strip())
             content = match.group(2).strip().strip('"“”')
             if speaker and content and not self._is_meta_label(speaker):
                 parsed.append(DialogueLine(speaker=speaker, text=content))
@@ -218,19 +256,23 @@ class ScriptParser:
         filtered = [part for part in parts if part]
         return "；".join(filtered[:3]) or "环境具备明确空间层次与光影对比。"
 
-    def _build_scene_summary(self, label_map: OrderedDict[str, str], summary_parts: list[str], dialogue: list[DialogueLine]) -> str:
-        parts: list[str] = []
-        for key in ["动作描述", "剧情", "剧情重点", "分镜提示", "镜头提示"]:
-            value = label_map.get(key, "").strip()
-            if value:
-                parts.append(value)
-        parts.extend(summary_parts)
-        if not parts and dialogue:
-            parts.extend(line.text for line in dialogue[:2] if line.text.strip())
-        filtered = [part.strip(" ，。；") for part in parts if part.strip(" ，。；")]
-        return "；".join(filtered[:3]) or "角色推进剧情并发生冲突。"
+    def _clean_speaker_name(self, speaker: str) -> str:
+        cleaned = re.sub(r"[（(].*?[）)]", "", speaker or "").strip()
+        return cleaned
 
-    def _collect_characters(self, scenes: list[Scene]) -> list[CharacterProfile]:
+    def _build_scene_summary(self, label_map: OrderedDict[str, str], summary_parts: list[str], dialogue: list[DialogueLine]) -> str:
+        role_state = label_map.get("角色造型&情绪", "").strip() or label_map.get("角色造型", "").strip()
+        action = label_map.get("动作描述", "").strip() or label_map.get("剧情", "").strip() or label_map.get("剧情重点", "").strip()
+        camera = label_map.get("分镜提示", "").strip() or label_map.get("镜头提示", "").strip()
+        dialogue_summary = " ".join(f"{line.speaker}：{line.text}" for line in dialogue[:2] if line.text.strip())
+        fallback = "；".join(part.strip(" ，。；") for part in summary_parts[:2] if part.strip(" ，。；"))
+        merged_parts = [part for part in [role_state, action, dialogue_summary, camera, fallback] if part]
+        if not merged_parts:
+            return "角色推进剧情并发生冲突。"
+        dense = "。".join(part.strip("。； ") for part in merged_parts[:4] if part.strip("。； "))
+        return dense.strip("。； ") + "。"
+
+    def _collect_characters(self, scenes: list[Scene], theme: str) -> list[CharacterProfile]:
         names: OrderedDict[str, None] = OrderedDict()
         mention_scores: dict[str, int] = {}
         scene_profile_map: dict[str, dict[str, str]] = {}
@@ -255,6 +297,7 @@ class ScriptParser:
                 name,
                 role_map.get(name, "supporting"),
                 scene_profile,
+                theme,
             )
             profiles.append(
                 CharacterProfile(
@@ -293,14 +336,6 @@ class ScriptParser:
 
     def _apply_character_consistency(self, scenes: list[Scene], characters: list[CharacterProfile], theme: str) -> None:
         appearance_map = {character.name: character for character in characters}
-        roster_prompt = "；".join(
-            (
-                f"{character.name}：身份{character.identity or '待补充'}，性别{character.gender}，年龄层{character.age_group}，"
-                f"外貌{character.appearance}，服装{character.costume}，气质{character.temperament}，"
-                f"说话方式{character.speech_style}，性格{('、'.join(character.traits) or '克制')}"
-            )
-            for character in characters
-        )
         theme_prompt = theme or "短剧冲突"
         for scene in scenes:
             location_text = f"{scene.location} {scene.time_of_day}".strip()
@@ -319,6 +354,14 @@ class ScriptParser:
                 ) or "角色形象保持前后一致"
                 dialogue_hint = " ".join(line.text for line in shot.dialogue)
                 story_focus = dialogue_hint or shot.narration or shot.visual_description or scene.summary
+                dense_video_paragraph = self._build_dense_video_paragraph(
+                    scene,
+                    shot,
+                    active_names,
+                    story_focus,
+                    appearance_map,
+                    active_prompt,
+                )
                 focal_profile = appearance_map.get(shot.character_focus)
                 if focal_profile:
                     shot.character_identity = focal_profile.identity or shot.character_identity
@@ -326,24 +369,91 @@ class ScriptParser:
                     shot.speaker_age_group = focal_profile.age_group or shot.speaker_age_group
                     shot.delivery_style = focal_profile.speech_style or shot.delivery_style
                 shot.image_prompt = (
-                    f"竖屏短剧电影感空镜背景，主题：{theme_prompt}。场景：{location_text}，环境细节：{scene.environment_details}。"
+                    f"4:3画幅短剧电影感空镜背景，主题：{theme_prompt}。场景：{location_text}，环境细节：{scene.environment_details}。"
                     f"镜头性质：{shot.camera}，景别：{shot.framing}，视角：{shot.viewpoint}，运镜：{shot.camera_movement}，转场：{shot.transition}。"
                     f"剧情氛围：{story_focus}。"
                     f"要求只生成场景背景与环境布置，不出现人物、不出现人脸、不出现人体、不出现手臂、不出现剪影、"
                     f"不出现倒影中的人物，不出现多人关系。突出空间结构、景深、灯光、道具、前后景层次、构图稳定，"
                     f"作为后续视频生成的场景底图参考。"
                 )
-                shot.video_prompt = (
-                    f"竖屏短剧视频镜头，场景{location_text}，环境{scene.environment_details}，"
-                    f"焦点人物{shot.character_focus}，身份{shot.character_identity or '剧情核心人物'}，性别{shot.speaker_gender}，年龄层{shot.speaker_age_group}，"
-                    f"景别{shot.framing}，镜头{shot.camera}，视角{shot.viewpoint}，运镜{shot.camera_movement}，镜头语言{shot.lens_language}，"
-                    f"镜头目标{shot.shot_purpose}，转场{shot.transition}，情绪{shot.emotion}，表情{shot.expression}，动作{shot.body_action}，"
-                    f"台词语气{shot.delivery_style}，剧情表现：{story_focus}。{active_prompt}。要求多主体动作逻辑清晰，视角推进明确，运镜推动剧情，符合短剧节奏。"
-                )
+                shot.video_prompt = dense_video_paragraph
                 if shot.dialogue:
                     shot.tts_text = self._build_tts_text(shot.dialogue, shot.delivery_style)
                 else:
                     shot.tts_text = ""
+
+    def _build_dense_video_paragraph(
+        self,
+        scene: Scene,
+        shot: Shot,
+        active_names: list[str],
+        story_focus: str,
+        appearance_map: dict[str, CharacterProfile],
+        active_prompt: str,
+    ) -> str:
+        active_characters = "；".join(name for name in active_names if name) or (shot.character_focus or "主角")
+        visual_anchors = "；".join(
+            self._build_character_visual_anchor(appearance_map[name], include_voice=False)
+            for name in active_names
+            if name in appearance_map
+        ) or active_prompt
+        beat_prompt = self._build_shot_beats(shot, story_focus)
+        if shot.dialogue:
+            dialogue_text = shot.dialogue[0].text.strip() if shot.dialogue else ""
+            sync_requirement = (
+                f"【核心动作】{shot.character_focus or active_characters}正在开口说话，"
+                f"嘴部清晰地说出「{dialogue_text[:30]}」，嘴唇开合幅度与中文发音节奏一致，下巴自然活动。"
+                "仅一人说话，不要多人同时张嘴，"
+                "镜头保持稳定或仅轻微推进，避免突兀甩镜、快速变焦和夸张肢体抖动。"
+            )
+        else:
+            sync_requirement = "当前镜头以动作和气氛推进为主，运动平顺自然，避免无意义抖动和突然卡顿。"
+        if shot.dialogue:
+            state_desc = f"角色正在说话，{shot.expression}，身体与手部动作是{shot.body_action}"
+        else:
+            state_desc = f"角色状态是{shot.emotion}，表情细节为{shot.expression}，身体与手部动作是{shot.body_action}"
+        return (
+            f"4:3画幅短剧电影镜头。地点在{scene.location}，时间为{scene.time_of_day}，环境包含{scene.environment_details}。"
+            f"当前镜头聚焦{active_characters}，其中核心人物是{shot.character_focus}，身份为{shot.character_identity or '剧情核心人物'}，"
+            f"人物连续性锚点：{visual_anchors}。"
+            f"{state_desc}。"
+            f"剧情推进为：{story_focus}。"
+            f"镜头节奏按拍推进：{beat_prompt}。"
+            f"镜头采用{shot.camera}，景别为{shot.framing}，视角为{shot.viewpoint}，运镜为{shot.camera_movement}，"
+            f"前后景关系和镜头语言为{shot.lens_language}，转场方式是{shot.transition}。"
+            f"{sync_requirement}"
+            "先交代主体与站位，再交代镜头观察方式，再交代动作如何在时间中展开，最后补充氛围与真实感锚点。"
+            "要求人物发型、服装层次、饰品、法器、环境、动作和空间关系连续稳定，"
+            "同一角色在前后镜头保持同一套造型设定，画面自然流畅，不要截肢，不要异常裁切，不要让角色凭空闪变。"
+        )
+
+    def _build_character_visual_anchor(self, profile: CharacterProfile, include_voice: bool = True) -> str:
+        parts = [profile.name]
+        if profile.identity:
+            parts.append(f"身份{profile.identity}")
+        if profile.appearance:
+            parts.append(f"外貌{profile.appearance}")
+        if profile.costume:
+            parts.append(f"服装{profile.costume}")
+        if profile.temperament:
+            parts.append(f"气质{profile.temperament}")
+        if include_voice and profile.speech_style:
+            parts.append(f"说话方式{profile.speech_style}")
+        return "，".join(part for part in parts if part)
+
+    def _build_shot_beats(self, shot: Shot, story_focus: str) -> str:
+        focus = shot.character_focus or "主角"
+        if shot.dialogue:
+            line_text = shot.dialogue[0].text.strip() if shot.dialogue else shot.tts_text.strip()
+            return (
+                f"{focus}从视频第一帧起就在开口说话，"
+                f"嘴部从头到尾清晰地说出[{line_text[:18]}]，"
+                f"说话贯穿整个镜头，说完后短暂停顿收住情绪。"
+            )
+        return (
+            f"第一拍建立场景与人物站位，第二拍推进{story_focus[:24]}，"
+            "第三拍用停顿、眼神或环境反应收束悬念。"
+        )
 
     def _build_narration(self, index: int, total_shots: int, dialogue_slice: list[DialogueLine], visual_description: str, scene_mood: str) -> str:
         if dialogue_slice:
@@ -358,17 +468,21 @@ class ScriptParser:
             return ""
         return visual_description[:36].rstrip("，。；")
 
-    def _build_character_profile(self, index: int, name: str, role: str, scene_profile: dict[str, str]) -> tuple[str, str, str, list[str], str, str, str, str, str]:
+    def _build_character_profile(self, index: int, name: str, role: str, scene_profile: dict[str, str], theme: str) -> tuple[str, str, str, list[str], str, str, str, str, str]:
         gender = scene_profile.get("gender") or self._infer_gender(name, scene_profile.get("raw", ""))
         age_group = scene_profile.get("age_group") or self._infer_age_group(name, scene_profile.get("raw", ""))
         identity = scene_profile.get("identity") or self._infer_identity(name, scene_profile.get("raw", ""))
         speech_style = scene_profile.get("speech_style") or self._infer_speech_style(name, scene_profile.get("raw", ""))
+        is_xianxia = any(keyword in (theme or "") for keyword in ["修仙", "仙侠", "仙门", "宗门", "飞升", "灵气"])
         if role == "female_lead":
+            default_appearance = "二十出头的年轻女修，黑发如墨，肤色冷白，眼尾锋利，发间常配玉簪或金饰，眉眼里压着不肯低头的狠意" if is_xianxia else "二十多岁年轻女性，黑色长发，肤色冷白，眼神清醒锋利，五官精致立体"
+            default_costume = "赤金或墨色法袍层层叠穿，外覆轻纱或斗篷，衣料带暗纹与流光，腰间悬玉佩、符囊或法器" if is_xianxia else "米色风衣叠穿丝质衬衫，利落高腰长裤，低饱和都市职场配色"
+            default_temperament = "冷冽克制，压着滔天情绪，却始终不失锋芒与威压" if is_xianxia else "冷静克制、压抑中带锋芒的都市精英感"
             return (
-                scene_profile.get("appearance") or "二十多岁年轻女性，黑色长发，肤色冷白，眼神清醒锋利，五官精致立体",
-                scene_profile.get("costume") or "米色风衣叠穿丝质衬衫，利落高腰长裤，低饱和都市职场配色",
-                scene_profile.get("temperament") or "冷静克制、压抑中带锋芒的都市精英感",
-                self._merge_traits(["克制", "敏锐", "有压抑情绪"], scene_profile.get("temperament", "")),
+                scene_profile.get("appearance") or default_appearance,
+                scene_profile.get("costume") or default_costume,
+                scene_profile.get("temperament") or default_temperament,
+                self._merge_traits(["克制", "敏锐", "有压抑情绪"] if not is_xianxia else ["冷冽", "隐忍", "锋利"], scene_profile.get("temperament", "")),
                 "female_lead",
                 gender,
                 age_group,
@@ -376,22 +490,28 @@ class ScriptParser:
                 speech_style,
             )
         if role == "male_lead":
+            default_appearance = "二十多岁的年轻男修，墨发高束，眉眼深冷，轮廓凌厉，身形挺拔，目光压着情绪不外露" if is_xianxia else "二十多岁年轻男性，短黑发，眉眼深邃，轮廓利落，身形挺拔"
+            default_costume = "玄色或雪色长袍外覆大氅，衣摆与护腕有宗门纹样，佩剑或法器不离身" if is_xianxia else "深色西装或长款大衣，层次简洁，质感高级，商务都市风"
+            default_temperament = "克制冷硬，压迫感强，像随时会出剑却又强行收住" if is_xianxia else "冷静强势、压迫感明显、情绪内敛"
             return (
-                scene_profile.get("appearance") or "二十多岁年轻男性，短黑发，眉眼深邃，轮廓利落，身形挺拔",
-                scene_profile.get("costume") or "深色西装或长款大衣，层次简洁，质感高级，商务都市风",
-                scene_profile.get("temperament") or "冷静强势、压迫感明显、情绪内敛",
-                self._merge_traits(["冷静", "压迫感强", "情绪内敛"], scene_profile.get("temperament", "")),
+                scene_profile.get("appearance") or default_appearance,
+                scene_profile.get("costume") or default_costume,
+                scene_profile.get("temperament") or default_temperament,
+                self._merge_traits(["冷静", "压迫感强", "情绪内敛"] if not is_xianxia else ["冷硬", "克制", "压迫感强"], scene_profile.get("temperament", "")),
                 "male_lead",
                 gender,
                 age_group,
                 identity,
                 speech_style,
             )
+        default_appearance = "修仙配角，轮廓鲜明，妆发与修为、宗门身份相配" if is_xianxia else "年轻都市配角，外形轮廓清晰，妆发与身份匹配"
+        default_costume = "长袍、法袍、斗篷或侍从服饰固定，配色与阵营身份清晰" if is_xianxia else "现代都市穿着，服装设定固定并与剧情身份相符"
+        default_temperament = "服务冲突推进，立场鲜明，气息和阵营明确" if is_xianxia else "服务剧情推进，人物关系明确"
         return (
-            scene_profile.get("appearance") or "年轻都市配角，外形轮廓清晰，妆发与身份匹配",
-            scene_profile.get("costume") or "现代都市穿着，服装设定固定并与剧情身份相符",
-            scene_profile.get("temperament") or "服务剧情推进，人物关系明确",
-            self._merge_traits(["推动剧情"], scene_profile.get("temperament", "")),
+            scene_profile.get("appearance") or default_appearance,
+            scene_profile.get("costume") or default_costume,
+            scene_profile.get("temperament") or default_temperament,
+            self._merge_traits(["推动剧情"] if not is_xianxia else ["立场鲜明", "服务冲突"], scene_profile.get("temperament", "")),
             "supporting",
             gender,
             age_group,
@@ -463,7 +583,7 @@ class ScriptParser:
 
     def _infer_identity(self, name: str, text: str) -> str:
         combined = f"{name}{text}"
-        identity_keywords = ["总裁", "医生", "律师", "助理", "保姆", "秘书", "学生", "校花", "校霸", "警察", "记者", "皇后", "公主", "王爷", "太子", "母亲", "父亲", "前任", "未婚妻", "老板"]
+        identity_keywords = ["宗主", "掌门", "长老", "真君", "真人", "仙尊", "魔尊", "弟子", "圣女", "道侣", "师尊", "师兄", "师姐", "少主", "护法", "剑修", "医修", "丹修", "器修", "总裁", "医生", "律师", "助理", "保姆", "秘书", "学生", "校花", "校霸", "警察", "记者", "皇后", "公主", "王爷", "太子", "母亲", "父亲", "前任", "未婚妻", "老板"]
         for keyword in identity_keywords:
             if keyword in combined:
                 return keyword
@@ -519,7 +639,7 @@ class ScriptParser:
 
     def _extract_costume(self, text: str) -> str:
         costume_parts: list[str] = []
-        for anchor in ["穿", "身着", "一袭", "戴", "披", "西装", "风衣", "校服", "长裙", "盔甲", "工装", "制服", "军便服", "衬衫", "围裙", "解放鞋", "布鞋", "大衣", "旗袍"]:
+        for anchor in ["穿", "身着", "一袭", "戴", "披", "法袍", "道袍", "仙裙", "广袖", "斗篷", "护腕", "发冠", "金冠", "玉簪", "佩剑", "符囊", "西装", "风衣", "校服", "长裙", "盔甲", "工装", "制服", "军便服", "衬衫", "围裙", "解放鞋", "布鞋", "大衣", "旗袍"]:
             phrase = self._extract_phrase(text, [anchor])
             if phrase and phrase not in costume_parts:
                 costume_parts.append(phrase)
@@ -554,7 +674,15 @@ class ScriptParser:
             return "克制压抑"
         return default
 
-    def _derive_expression(self, text: str, mood: str) -> str:
+    def _derive_expression(self, text: str, mood: str, has_dialogue: bool = False) -> str:
+        if has_dialogue:
+            if any(word in text for word in ["质问", "为什么", "凭什么", "棋子", "两清"]):
+                return "眉头微锁，嘴部随对白节奏开合，语气逼人，目光直视对方"
+            if any(word in text for word in ["哭", "哽咽", "求你", "别走"]):
+                return "眼眶泛红，嘴唇微颤，随对白开合说话，声线带哭腔"
+            if "压抑" in mood or "克制" in mood:
+                return "神情克制但嘴部自然开合说出台词，眼神压着情绪，语速沉稳"
+            return "表情自然，嘴部随台词节奏清晰开合，目光交流明确"
         if any(word in text for word in ["质问", "为什么", "凭什么", "棋子", "两清"]):
             return "眉头收紧，眼神逼视，对方情绪明显绷紧"
         if "压抑" in mood or "克制" in mood:

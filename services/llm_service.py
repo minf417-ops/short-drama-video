@@ -3,7 +3,6 @@ import os
 import re
 import time
 from typing import Any, Dict
-
 from dotenv import load_dotenv
 
 try:
@@ -22,7 +21,7 @@ class LLMService:
         self.model = ""
         self.request_timeout = 300.0
         self.retry_on_timeout = 2
-        self.max_completion_tokens = 8192
+        self.max_completion_tokens = 16384
         self.strict_api = True
         self.last_call_mode = "uninitialized"
         self.client = None
@@ -34,7 +33,7 @@ class LLMService:
         next_model = os.getenv("ARK_MODEL", "doubao-seed-2-0-pro-260215").strip().strip('"').strip("'")
         next_timeout = float(os.getenv("ARK_TIMEOUT_SECONDS", "300").strip().strip('"').strip("'") or "300")
         next_retry = int(os.getenv("ARK_RETRY_ON_TIMEOUT", "2").strip().strip('"').strip("'") or "2")
-        next_max_tokens = int(os.getenv("ARK_MAX_TOKENS", "8192").strip().strip('"').strip("'") or "8192")
+        next_max_tokens = int(os.getenv("ARK_MAX_TOKENS", "16384").strip().strip('"').strip("'") or "16384")
         next_strict = os.getenv("STRICT_LLM_API", "1").strip().lower() not in {"0", "false", "no"}
         changed = force_rebuild or any(
             [
@@ -58,9 +57,25 @@ class LLMService:
             self._init_client()
         return changed
 
+    _PROXY_KEYS = [
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    ]
+
     def _init_client(self) -> None:
         if self.api_key and self.model and OpenAI is not None:
-            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=self.request_timeout, max_retries=0)
+            saved = {k: os.environ.pop(k, None) for k in self._PROXY_KEYS}
+            try:
+                self.client = OpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    timeout=self.request_timeout,
+                    max_retries=0,
+                )
+            finally:
+                for k, v in saved.items():
+                    if v is not None:
+                        os.environ[k] = v
         else:
             self.client = None
 
@@ -109,7 +124,7 @@ class LLMService:
             "max_completion_tokens": self.max_completion_tokens,
         }
 
-    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 3200) -> str:
+    def complete(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 4096) -> str:
         self.refresh_config()
         if not self.client:
             self.last_call_mode = "unavailable"

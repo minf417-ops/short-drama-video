@@ -107,6 +107,7 @@ class TimelineClip:
     visual_asset_id: str
     audio_asset_id: str
     subtitle_text: str
+    subtitle_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

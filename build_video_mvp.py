@@ -22,6 +22,11 @@ DEFAULT_SCRIPT = """场景1：内景 夜 办公室
 林晚：从今天开始，我们两清。
 """
 
+TEST_SCRIPT = """场景1：内景 夜 办公室
+林晚站在落地窗前，手机屏幕泛着冷光。
+林晚：原来你早就知道了。
+"""
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a script-to-video MVP project structure.")
@@ -29,11 +34,17 @@ def main() -> None:
     parser.add_argument("--theme", default="都市情感反转", help="项目主题")
     parser.add_argument("--script-file", default="", help="剧本文本文件路径")
     parser.add_argument("--output-dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "video_mvp"), help="输出目录")
+    parser.add_argument("--ratio", default="16:9", help="视频比例（如 16:9, 9:16, 4:3）")
+    parser.add_argument("--resolution", default="1920x1080", help="视频分辨率（如 1920x1080, 1080x1920）")
     parser.add_argument("--target-duration", type=float, default=18.0, help="目标视频时长（秒）")
     parser.add_argument("--max-duration", type=float, default=20.0, help="最大视频时长（秒）")
+    parser.add_argument("--test", action="store_true", help="视频链路测试模式（时长≤5秒，仅生成1个镜头）")
     args = parser.parse_args()
+    if args.test:
+        args.target_duration = 5.0
+        args.max_duration = 5.0
 
-    script_text = DEFAULT_SCRIPT
+    script_text = TEST_SCRIPT if args.test else DEFAULT_SCRIPT
     if args.script_file:
         with open(args.script_file, "r", encoding="utf-8") as file:
             script_text = file.read()
@@ -43,6 +54,8 @@ def main() -> None:
         title=args.title,
         theme=args.theme,
         script_text=script_text,
+        ratio=args.ratio,
+        resolution=args.resolution,
         target_duration_seconds=args.target_duration,
         max_duration_seconds=args.max_duration,
     )

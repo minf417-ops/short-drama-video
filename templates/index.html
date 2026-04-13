@@ -9,210 +9,326 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <!-- 背景装饰粒子 -->
-  <div class="bg-decoration">
-    <div class="bg-orb bg-orb-1"></div>
-    <div class="bg-orb bg-orb-2"></div>
-    <div class="bg-orb bg-orb-3"></div>
-  </div>
+  <!-- ===== Left Navigation Sidebar ===== -->
+  <aside class="nav-sidebar">
+    <div class="nav-brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="23 7 16 12 23 17 23 7"/>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+      </svg>
+      <span class="nav-brand-text">AI 短剧<br>创作工坊</span>
+    </div>
 
-  <div class="page-shell">
-    <header class="hero fade-in-up">
-      <div class="hero-icon">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="23 7 16 12 23 17 23 7"/>
-          <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-        </svg>
-      </div>
-      <div>
-        <p class="eyebrow">Multi-Agent Script Studio</p>
-        <h1>AI 短剧创作工坊</h1>
-        <p class="subtitle">Planner / Writer / Reviewer / Director 四大 AI Agent 协作<br>从创意到剧本到视频，一站式自动化生产</p>
-      </div>
-    </header>
-
-    <!-- ========== 步骤指示器 ========== -->
-    <div class="steps-bar fade-in-up delay-1">
+    <nav class="steps-bar">
       <div class="step active" data-step="input">
         <div class="step-dot"><span>1</span></div>
         <div class="step-label">创意输入</div>
       </div>
       <div class="step-line"></div>
-      <div class="step" data-step="process">
+      <div class="step" data-step="outline-review">
         <div class="step-dot"><span>2</span></div>
-        <div class="step-label">AI 创作</div>
+        <div class="step-label">大纲审阅</div>
+      </div>
+      <div class="step-line"></div>
+      <div class="step" data-step="script-review">
+        <div class="step-dot"><span>3</span></div>
+        <div class="step-label">正文审阅</div>
       </div>
       <div class="step-line"></div>
       <div class="step" data-step="result">
-        <div class="step-dot"><span>3</span></div>
+        <div class="step-dot"><span>4</span></div>
         <div class="step-label">成果导出</div>
       </div>
+    </nav>
+
+    <div class="nav-footer">
+      <div class="nav-footer-label">配色方案</div>
+      <div class="theme-switcher" id="theme-switcher">
+        <div class="theme-dot active" data-theme="rose" title="玫瑰灰"></div>
+        <div class="theme-dot" data-theme="sage" title="鼠尾草"></div>
+        <div class="theme-dot" data-theme="steel" title="雾蓝"></div>
+        <div class="theme-dot" data-theme="lavender" title="薰衣草"></div>
+        <div class="theme-dot" data-theme="caramel" title="焦糖"></div>
+      </div>
     </div>
+  </aside>
 
-    <main class="main-content">
-      <!-- ========== 输入区 ========== -->
-      <section class="card form-card fade-in-up delay-2" id="input-section">
-        <div class="card-header">
-          <h2><span class="card-icon">&#9997;</span> 创作输入</h2>
+  <!-- ===== Main Workspace ===== -->
+  <div class="workspace">
+
+    <!-- ===== Step 1: Input ===== -->
+    <section class="ws-section" id="input-section">
+      <div class="panel-center">
+        <div class="welcome">
+          <div class="welcome-icon">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7"/>
+              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+            </svg>
+          </div>
+          <h1>AI 短剧创作工坊</h1>
+          <p class="welcome-sub">四大 AI Agent 协作，从创意到剧本到视频<br>一站式自动化短剧生产工作流</p>
+          <div class="welcome-agents">
+            <span class="welcome-agent">Planner</span>
+            <span class="welcome-agent">Writer</span>
+            <span class="welcome-agent">Reviewer</span>
+            <span class="welcome-agent">Director</span>
+          </div>
         </div>
-        <form id="generate-form">
-          <div class="section-title">
-            <span class="section-icon">&#127916;</span> 核心设定
-          </div>
-          <div class="field">
-            <label for="theme">主题 <span class="required">*</span></label>
-            <input id="theme" name="theme" placeholder="例如：豪门复仇中，失忆女主发现仇人竟是未婚夫" required>
-          </div>
-
-          <div class="two-col">
+      </div>
+      <div class="panel-right">
+        <div class="panel-scroll">
+          <form id="generate-form">
+            <div class="form-title">核心设定</div>
             <div class="field">
-              <label for="keywords">关键词</label>
-              <input id="keywords" name="keywords" placeholder="用逗号分隔，如：重生, 复仇, 反转">
+              <label for="theme">主题 <span class="required">*</span></label>
+              <input id="theme" name="theme" placeholder="例如：豪门复仇中，失忆女主发现仇人竟是未婚夫" required>
             </div>
-            <div class="field">
-              <label for="audience">目标受众</label>
-              <input id="audience" name="audience" placeholder="如：18-35岁女性用户">
+            <div class="two-col">
+              <div class="field">
+                <label for="keywords">关键词</label>
+                <input id="keywords" name="keywords" placeholder="用逗号分隔">
+              </div>
+              <div class="field">
+                <label for="audience">目标受众</label>
+                <input id="audience" name="audience" placeholder="如：18-35岁女性">
+              </div>
             </div>
-          </div>
 
-          <div class="section-title">
-            <span class="section-icon">&#127912;</span> 风格控制
-          </div>
-          <div class="two-col">
+            <div class="form-title">风格控制</div>
             <div class="field">
               <label>剧本风格（点选，可多选）</label>
-              <div class="tag-selector" id="style-tags">
-                <!-- JS 动态生成 -->
-              </div>
+              <div class="tag-selector" id="style-tags"></div>
               <input type="hidden" id="styles-hidden" name="styles">
             </div>
-            <div class="field">
-              <label for="writing_tone">文字风格</label>
-              <div class="custom-select" id="tone-select-wrap">
-                <div class="custom-select-trigger" id="tone-trigger" tabindex="0">
-                  <span class="select-value">影视化强张力</span>
-                  <span class="select-arrow">
-                    <svg width="12" height="12" viewBox="0 0 12 12"><polyline points="2,4 6,8 10,4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-                  </span>
+            <div class="form-title">文字风格 / 长度约束</div>
+            <div class="three-col">
+              <div class="field">
+                <label for="writing_tone">文字风格</label>
+                <div class="custom-select" id="tone-select-wrap">
+                  <div class="custom-select-trigger" id="tone-trigger" tabindex="0">
+                    <span class="select-value">影视化强张力</span>
+                    <span class="select-arrow">
+                      <svg width="12" height="12" viewBox="0 0 12 12"><polyline points="2,4 6,8 10,4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                    </span>
+                  </div>
+                  <ul class="custom-select-options" id="tone-options">
+                    <li class="option selected" data-value="影视化强张力">影视化强张力</li>
+                    <li class="option" data-value="白描写实">白描写实</li>
+                    <li class="option" data-value="网感口语">网感口语</li>
+                    <li class="option" data-value="诗性抒情">诗性抒情</li>
+                    <li class="option" data-value="冷峻悬疑">冷峻悬疑</li>
+                    <li class="option" data-value="古典凝练">古典凝练</li>
+                    <li class="option" data-value="轻快喜感">轻快喜感</li>
+                    <li class="option" data-value="黑色幽默">黑色幽默</li>
+                  </ul>
                 </div>
-                <ul class="custom-select-options" id="tone-options">
-                  <li class="option selected" data-value="影视化强张力">影视化强张力</li>
-                  <li class="option" data-value="白描写实">白描写实</li>
-                  <li class="option" data-value="网感口语">网感口语</li>
-                  <li class="option" data-value="诗性抒情">诗性抒情</li>
-                  <li class="option" data-value="冷峻悬疑">冷峻悬疑</li>
-                  <li class="option" data-value="古典凝练">古典凝练</li>
-                  <li class="option" data-value="轻快喜感">轻快喜感</li>
-                  <li class="option" data-value="黑色幽默">黑色幽默</li>
-                </ul>
+                <input type="hidden" id="writing_tone" name="writing_tone" value="影视化强张力">
               </div>
-              <input type="hidden" id="writing_tone" name="writing_tone" value="影视化强张力">
+              <div class="field">
+                <label for="episodes">集数</label>
+                <input id="episodes" name="episodes" type="number" min="1" value="1">
+              </div>
+              <div class="field">
+                <label for="episode_duration">单集时长（秒）</label>
+                <input id="episode_duration" name="episode_duration" type="number" min="15" value="60">
+              </div>
             </div>
-          </div>
 
-          <div class="section-title">
-            <span class="section-icon">&#9881;</span> 长度与约束
-          </div>
-          <div class="two-col">
             <div class="field">
-              <label for="episodes">集数</label>
-              <input id="episodes" name="episodes" type="number" min="1" value="1">
+              <label for="extra_requirements">补充要求</label>
+              <textarea id="extra_requirements" name="extra_requirements" rows="2" placeholder="例如：前3秒必须出现强冲突；每15秒一个反转"></textarea>
             </div>
-            <div class="field">
-              <label for="episode_duration">单集时长（秒）</label>
-              <input id="episode_duration" name="episode_duration" type="number" min="15" value="60">
+
+            <div class="field checkbox-field">
+              <label class="toggle-label">
+                <input type="checkbox" id="generate_video" name="generate_video">
+                <span class="toggle-switch"></span>
+                <span>同时生成即梦 AI 视频</span>
+              </label>
+            </div>
+
+            <div class="button-row">
+              <button type="submit" class="btn-primary" id="submit-btn">
+                <span class="btn-icon">&#9889;</span> 开始创作
+              </button>
+              <button type="button" id="reset-button" class="btn-ghost">重置</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Step 2: Outline Review ===== -->
+    <section class="ws-section hidden" id="outline-section">
+      <div class="panel-center">
+        <div class="panel-header">
+          <h2>&#128220; 大纲审阅</h2>
+          <div id="outline-status-badge" class="status idle">待开始</div>
+        </div>
+        <div class="panel-scroll">
+          <div class="progress-bar-wrap">
+            <div class="progress-bar" id="outline-progress-bar"></div>
+          </div>
+          <div id="outline-agent-indicators" class="agent-indicators">
+            <div class="agent-chip" data-agent="planner">
+              <span class="agent-dot"></span> Planner
             </div>
           </div>
-
-          <div class="field">
-            <label for="extra_requirements">补充要求</label>
-            <textarea id="extra_requirements" name="extra_requirements" rows="3" placeholder="例如：前3秒必须出现强冲突；每15秒一个反转；结尾要有下一集钩子"></textarea>
-          </div>
-
-          <div class="field checkbox-field">
-            <label class="toggle-label">
-              <input type="checkbox" id="generate_video" name="generate_video">
-              <span class="toggle-switch"></span>
-              <span>同时生成即梦 AI 视频（需配置火山引擎视频 + TTS + FFmpeg）</span>
-            </label>
-          </div>
-
-          <div class="button-row">
-            <button type="submit" class="btn-primary" id="submit-btn">
-              <span class="btn-icon">&#9889;</span> 开始创作
-            </button>
-            <button type="button" id="reset-button" class="btn-ghost">重置</button>
-          </div>
-        </form>
-      </section>
-
-      <!-- ========== 过程区 ========== -->
-      <section class="card process-card hidden" id="process-section">
-        <div class="card-header">
-          <h2><span class="card-icon">&#9881;</span> 创作进度</h2>
-          <div id="status-badge" class="status idle">待开始</div>
-        </div>
-        <div class="progress-bar-wrap">
-          <div class="progress-bar" id="progress-bar"></div>
-        </div>
-        <div id="agent-indicators" class="agent-indicators">
-          <div class="agent-chip" data-agent="planner">
-            <span class="agent-dot"></span> Planner
-          </div>
-          <div class="agent-chip" data-agent="writer">
-            <span class="agent-dot"></span> Writer
-          </div>
-          <div class="agent-chip" data-agent="reviewer">
-            <span class="agent-dot"></span> Reviewer
-          </div>
-          <div class="agent-chip" data-agent="director">
-            <span class="agent-dot"></span> Director
+          <div id="outline-logs" class="logs"></div>
+          <div id="outline-review-wrap" style="display:none; margin-top:14px">
+            <div id="outline-review-panel" class="outline-panel">
+              <div id="outline-review-content"></div>
+            </div>
           </div>
         </div>
-        <div id="logs" class="logs"></div>
-        <div class="process-actions">
-          <button type="button" id="back-to-input" class="btn-ghost btn-sm">&#8592; 返回修改</button>
-        </div>
-      </section>
-
-      <!-- ========== 结果区 ========== -->
-      <section class="card result-card hidden" id="result-section">
-        <div class="card-header">
-          <h2><span class="card-icon">&#127917;</span> 创作成果</h2>
-          <div class="export-row" id="export-row"></div>
-        </div>
-
-        <div class="result-tabs">
-          <button class="tab-btn active" data-tab="outline-tab">剧本概览</button>
-          <button class="tab-btn" data-tab="script-tab">完整剧本</button>
-          <button class="tab-btn" data-tab="video-tab" id="video-tab-btn" style="display:none">即梦 AI 视频</button>
-        </div>
-
-        <div id="outline-tab" class="tab-panel active">
-          <div id="outline-panel" class="outline-panel"></div>
-        </div>
-        <div id="script-tab" class="tab-panel">
-          <div id="script-output" class="script-output">
-            <div class="script-empty">生成后的剧本会显示在这里</div>
+      </div>
+      <div class="panel-right">
+        <div class="panel-scroll">
+          <div id="outline-chat-area" class="edit-chat-area" style="display:none">
+            <p class="edit-hint">对大纲提出修改意见：</p>
+            <div id="outline-chat-history" class="edit-chat-history"></div>
+            <div class="edit-input-row">
+              <input type="text" id="outline-edit-input" class="edit-input" placeholder="如：把反转改得更有悬念...">
+              <button type="button" id="outline-edit-btn" class="btn-primary btn-sm">修改</button>
+            </div>
           </div>
         </div>
-        <div id="video-tab" class="tab-panel">
-          <div id="video-panel" class="video-panel">
-            <div class="script-empty">视频生成后会显示在这里</div>
-          </div>
-        </div>
-
-        <div class="result-actions">
-          <button type="button" id="new-creation" class="btn-primary btn-sm">
-            <span class="btn-icon">&#10010;</span> 新建创作
+        <div class="panel-actions">
+          <button type="button" id="back-to-input" class="btn-ghost btn-sm">&#8592; 返回</button>
+          <div style="flex:1"></div>
+          <button type="button" id="confirm-outline-btn" class="btn-primary btn-sm" style="display:none">
+            确认大纲 &#8594;
           </button>
         </div>
-      </section>
-    </main>
+      </div>
+    </section>
 
-    <footer class="site-footer fade-in-up delay-3">
-      <p>AI 短剧创作工坊 &mdash; Powered by Multi-Agent LLM &amp; LangGraph</p>
-    </footer>
+    <!-- ===== Step 3: Script Review ===== -->
+    <section class="ws-section hidden" id="script-section">
+      <div class="panel-center">
+        <div class="panel-header">
+          <h2>&#128221; 正文审阅</h2>
+          <div id="script-status-badge" class="status idle">待开始</div>
+        </div>
+        <div class="panel-scroll">
+          <div class="progress-bar-wrap">
+            <div class="progress-bar" id="script-progress-bar"></div>
+          </div>
+          <div id="script-agent-indicators" class="agent-indicators">
+            <div class="agent-chip" data-agent="writer">
+              <span class="agent-dot"></span> Writer
+            </div>
+            <div class="agent-chip" data-agent="reviewer">
+              <span class="agent-dot"></span> Reviewer
+            </div>
+          </div>
+          <div id="script-logs" class="logs"></div>
+          <div id="script-review-panel" style="display:none; margin-top:14px">
+            <div class="result-tabs">
+              <button class="tab-btn active" data-tab="sr-overview-tab">剧本概览</button>
+              <button class="tab-btn" data-tab="sr-script-tab">完整剧本</button>
+              <button class="tab-btn" data-tab="sr-edit-tab">场景编辑</button>
+            </div>
+            <div id="sr-overview-tab" class="tab-panel active">
+              <div id="script-overview-panel" class="outline-panel"></div>
+            </div>
+            <div id="sr-script-tab" class="tab-panel">
+              <div id="script-output" class="script-output">
+                <div class="script-empty">生成后的剧本会显示在这里</div>
+              </div>
+            </div>
+            <div id="sr-edit-tab" class="tab-panel">
+              <div class="edit-panel">
+                <div class="edit-panel-header">
+                  <p class="edit-hint">点击场景卡片选择要修改的场景，然后输入修改指令。</p>
+                </div>
+                <div id="edit-scene-cards" class="edit-scene-cards">
+                  <div class="script-empty">生成剧本后，场景列表会显示在这里</div>
+                </div>
+                <div class="edit-chat-area">
+                  <div class="edit-selected-info" id="edit-selected-info" style="display:none">
+                    <span class="edit-selected-badge">当前选中：</span>
+                    <span id="edit-selected-scene-label">场景 1</span>
+                    <button type="button" class="edit-deselect-btn" id="edit-deselect-btn" title="取消选择">&times;</button>
+                  </div>
+                  <div id="edit-chat-history" class="edit-chat-history"></div>
+                  <div class="edit-input-row">
+                    <input type="text" id="edit-instruction" class="edit-input" placeholder="输入修改指令" disabled>
+                    <button type="button" id="edit-submit-btn" class="btn-primary btn-sm" disabled>修改</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel-right">
+        <div class="panel-scroll">
+          <div id="script-chat-area" class="edit-chat-area" style="display:none">
+            <p class="edit-hint">对整体剧本提出修改意见：</p>
+            <div id="script-chat-history" class="edit-chat-history"></div>
+            <div class="edit-input-row">
+              <input type="text" id="script-review-input" class="edit-input" placeholder="输入对剧本的整体修改意见...">
+              <button type="button" id="script-review-btn" class="btn-primary btn-sm">修改</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel-actions">
+          <button type="button" id="back-to-outline" class="btn-ghost btn-sm">&#8592; 返回大纲</button>
+          <div style="flex:1"></div>
+          <button type="button" id="confirm-script-btn" class="btn-primary btn-sm" style="display:none">
+            确认剧本 &#8594;
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Step 4: Result ===== -->
+    <section class="ws-section hidden" id="result-section">
+      <div class="panel-center">
+        <div class="panel-header">
+          <h2>&#127917; 创作成果</h2>
+          <div class="export-row" id="export-row"></div>
+        </div>
+        <div class="panel-scroll">
+          <div class="result-tabs">
+            <button class="tab-btn active" data-tab="final-outline-tab">剧本概览</button>
+            <button class="tab-btn" data-tab="final-script-tab">完整剧本</button>
+            <button class="tab-btn" data-tab="video-tab" id="video-tab-btn" style="display:none">即梦 AI 视频</button>
+          </div>
+          <div id="final-outline-tab" class="tab-panel active">
+            <div id="outline-panel" class="outline-panel"></div>
+          </div>
+          <div id="final-script-tab" class="tab-panel">
+            <div id="final-script-output" class="script-output">
+              <div class="script-empty">确认后的完整剧本会显示在这里</div>
+            </div>
+          </div>
+          <div id="video-tab" class="tab-panel">
+            <div id="video-panel" class="video-panel">
+              <div class="script-empty">视频生成后会显示在这里</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel-right">
+        <div class="panel-scroll" style="display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:var(--muted); gap:14px">
+          <div style="font-size:40px">&#127917;</div>
+          <div style="font-size:13px; font-weight:600; color:var(--text)">创作完成</div>
+          <p style="font-size:11px; max-width:240px; line-height:1.6">剧本已生成完毕，可在左侧查看概览和完整剧本，或使用下方按钮导出。</p>
+        </div>
+        <div class="panel-actions">
+          <button type="button" id="new-creation" class="btn-primary btn-sm">
+            &#10010; 新建创作
+          </button>
+          <button type="button" id="generate-video-btn" class="btn-video btn-sm">
+            &#127909; 生成视频
+          </button>
+        </div>
+      </div>
+    </section>
+
   </div>
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>

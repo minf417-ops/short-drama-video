@@ -55,12 +55,12 @@ class DirectorAgent:
         request = state["request"]
         state = self._append_log(state, "Planner：生成大纲、冲突点与反转设计")
         started_at = time.time()
-        outline = self.planner.run(request)
+        outline = self.planner.run(request, logger=self._runtime_logger)
         state["outline"] = outline
         if "开场3秒内抛出与" in outline.opening_hook:
             state = self._append_log(state, "Planner：API生成大纲失败，已切换为结构化兜底大纲")
         elapsed = time.time() - started_at
-        state = self._append_log(state, f"Planner：完成，剧本标题暂定为《{outline.title}》 | 耗时 {elapsed:.1f}s")
+        state = self._append_log(state, f"Planner：完成，剧本标题暂定为{outline.title} | 耗时 {elapsed:.1f}s")
         return state
 
     def _writer_node(self, state: GraphState) -> GraphState:
@@ -73,7 +73,7 @@ class DirectorAgent:
         else:
             state = self._append_log(state, "Writer：开始编写场景、动作与对白")
         started_at = time.time()
-        draft = self.writer.run(request, outline, state.get("latest_feedback", ""))
+        draft = self.writer.run(request, outline, state.get("latest_feedback", ""), logger=self._runtime_logger)
         mode = draft.metadata.get("generation_mode", "unknown")
         elapsed = time.time() - started_at
         if mode == "fallback":
@@ -190,9 +190,24 @@ class DirectorAgent:
 
     def _script_completeness(self, request: UserRequest, script: str) -> Dict[str, Any]:
         """对最终脚本做完整性判断，供接口层决定是否允许继续导出 / 视频化。"""
+        import re as _re
+        valid_endings = ("\u3002", "\uff01", "\uff1f", "\u201d", "\u2019", "\u3011", "\uff09", ")", "\u2026", "\u2014", "\u2014\u2014", "\u300b", ".")
+        if request.episodes > 1:
+            ep_headers = _re.findall(r"第\d+集[：:]", script)
+            actual_ep_count = len(ep_headers)
+            target_ep_count = max(request.episodes, 1)
+            ep_ok = actual_ep_count >= max(target_ep_count - 1, 1)
+            is_complete = bool(script.strip()) and ep_ok and script.strip().endswith(valid_endings)
+            scenes_per_ep = self.writer._scenes_per_episode(request.episode_duration)
+            return {
+                "is_complete": is_complete,
+                "target_scene_count": target_ep_count * scenes_per_ep,
+                "actual_scene_count": actual_ep_count * scenes_per_ep,
+                "target_episodes": target_ep_count,
+                "actual_episodes": actual_ep_count,
+            }
         target_scene_count = self._target_scene_count(request)
         actual_scene_count = self._scene_marker_count(script)
-        valid_endings = ("\u3002", "\uff01", "\uff1f", "\u201d", "\u2019", "\u3011", "\uff09", ")", "\u2026", "\u2014", "\u2014\u2014", "\u300b", ".")
         scene_ok = actual_scene_count >= max(target_scene_count - 1, 1)
         is_complete = bool(script.strip()) and scene_ok and script.strip().endswith(valid_endings)
         return {

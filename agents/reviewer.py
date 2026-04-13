@@ -10,12 +10,20 @@ class ReviewerAgent:
 
     def run(self, request: UserRequest, draft: ScriptDraft) -> ReviewResult:
         local_issues = self._validate_locally(request, draft.content)
+        hard_issues = self._hard_issues(local_issues)
         if not local_issues:
             return ReviewResult(
                 approved=True,
                 feedback="快速审校通过：结构、主题、关键词与风格约束满足要求，保留当前稿件。",
                 polished_script=draft.content,
                 metadata={"review_mode": "local_fastpath"},
+            )
+        if not hard_issues:
+            return ReviewResult(
+                approved=True,
+                feedback=f"快速审校通过：存在轻微可优化项（{'; '.join(local_issues)}），已保留当前稿件。",
+                polished_script=draft.content,
+                metadata={"review_mode": "local_softpass", "local_issues": "; ".join(local_issues)},
             )
         system_prompt = "你是短剧审校Agent。你要检查逻辑、节奏、格式、风格统一性，并过滤违规内容。不要输出分析过程、解释或Markdown，只输出JSON。不要在JSON中包含剧本原文。"
         style_text = "、".join(request.styles)
@@ -55,6 +63,9 @@ JSON字段（只输出以下两个字段，不要输出剧本原文）：
             )
         approved = bool(data.get("approved", False))
         feedback = data.get("feedback", "审校完成")
+        if not approved and not hard_issues:
+            approved = True
+            feedback = f"审校建议已记录但不阻断出稿：{feedback}"
         return ReviewResult(
             approved=approved,
             feedback=feedback,
@@ -62,6 +73,7 @@ JSON字段（只输出以下两个字段，不要输出剧本原文）：
             metadata={
                 "review_mode": "api",
                 "tail_repair_only": "true" if self._should_tail_repair(local_issues) else "false",
+                "local_issues": "; ".join(local_issues),
             },
         )
 
@@ -97,6 +109,17 @@ JSON字段（只输出以下两个字段，不要输出剧本原文）：
         if not self._has_complete_final_scene(content, target_scene_count):
             issues.append("结尾场景不完整")
         return issues
+
+    def _hard_issues(self, issues: list[str]) -> list[str]:
+        hard_issue_set = {
+            "缺少场景结构",
+            "缺少镜头结构",
+            "缺少对白结构",
+            "篇幅过短",
+            "内容疑似截断",
+            "结尾场景不完整",
+        }
+        return [issue for issue in issues if issue in hard_issue_set]
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r"[\W_]+", "", text).lower()
