@@ -1,4 +1,4 @@
-# AI 短剧创作工坊
+# 多Agent短剧剧本与视频生成平台
  
  多 Agent 协作的短剧剧本生成与视频化系统。Planner / Writer / Reviewer / Director 四大 AI Agent 从创意到剧本到视频，一站式自动化生产。
  
