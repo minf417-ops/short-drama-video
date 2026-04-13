@@ -34,6 +34,7 @@ ENV/
 outputs/
 docs/
 tmp/
+refer/
 logs/
 *.log
 *.pdf
@@ -56,3 +57,5 @@ Thumbs.db
 
 #md文件
 PROJECT_PROFILE.md
+
+.codex_staging
