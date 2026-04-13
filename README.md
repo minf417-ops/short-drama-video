@@ -54,7 +54,7 @@ python app.py
  - **剧本导出**：支持 PDF / Word 导出
  - **导出层级格式**：Word / PDF 按“集标题 → 场景内容”格式输出，适合审阅与交付
  - **视频生成**：基于剧本自动生成视频（即梦 AI 文生视频 → TTS → FFmpeg 合成 → 字幕烧录）
- - **字幕系统**：SRT 字幕自动生成，支持自定义样式（字体、描边、阴影、位置）
+ - **字幕系统**：SRT 字幕自动生成
  - **异步任务**：后台线程执行，前端实时轮询进度与日志
  
 ## 剧本生成说明
@@ -89,16 +89,13 @@ python app.py
  5. **字幕渲染**：SRT 生成 + FFmpeg 字幕叠加
  6. **最终合成**：FFmpeg concat 拼接为完整视频
  
+ 视频生成结果默认输出到 `outputs/video_output/`，剧本导出文件默认输出到 `outputs/file_output/`。
  
- `docs/video_demo.mp4` 为项目当前视频生成能力的演示样例，可用于快速预览生成效果。
+ ## outputs 目录说明
  
- ## docs 目录说明
- 
- - `docs/video_demo.mp4`：视频生成效果演示文件，用于展示剧本驱动的视频成片效果。
- - `docs/《前世饿死今生抢粮》_1776070421.docx`：导出的 Word 剧本样例。
- - `docs/《前世饿死今生抢粮》_1776070422.pdf`：导出的 PDF 剧本样例。
- - `docs/《重生夺灵根复仇》_1776073373.docx`：另一份 Word 剧本导出样例。
- - `docs/《重生夺灵根复仇》_1776073373.pdf`：另一份 PDF 剧本导出样例。
+ - `outputs/file_output/`：存放导出的剧本文件，如 `.docx` 与 `.pdf`。
+ - `outputs/video_output/`：存放最终生成的视频成片，如 `.mp4`。
+ - `outputs/` 根目录下也可能包含日志、测试产物或中间文件目录。
  
  ## 目录结构
  
@@ -119,6 +116,9 @@ python app.py
      parser.py                   剧本结构化解析
      providers.py                图像/TTS/视频 Provider
      models.py                   视频数据模型
+ outputs/
+   file_output/                  Word / PDF 等剧本导出文件
+   video_output/                 最终视频输出目录
  templates/index.html            前端页面
  static/styles.css               样式表（暗色主题）
  static/app.js                   前端交互逻辑

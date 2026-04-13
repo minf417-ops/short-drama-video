@@ -31,7 +31,9 @@ ENV/
 .venv/
 
 # 自动生成的输出文件、大文件、临时文件（重点新增）
-outputs/
+outputs/*
+!outputs/file_output/
+!outputs/video_output/
 tmp/
 refer/
 logs/
@@ -44,9 +46,10 @@ logs/
 *.jpg
 *.jpeg
 *.mp4
-!docs/*.mp4
-!docs/*.pdf
-!docs/*.docx
+!outputs/file_output/*.pdf
+!outputs/file_output/*.docx
+!outputs/file_output/*.doc
+!outputs/video_output/*.mp4
 
 # IDE和系统文件
 .vscode/
