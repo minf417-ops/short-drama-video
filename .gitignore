@@ -45,6 +45,8 @@ logs/
 *.jpeg
 *.mp4
 !docs/*.mp4
+!docs/*.pdf
+!docs/*.docx
 
 # IDE和系统文件
 .vscode/
