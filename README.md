@@ -91,6 +91,8 @@ python app.py
  
  输出在 `outputs/video_mvp/` 目录。
  
+ `docs/video_demo.mp4` 为项目当前视频生成能力的演示样例，可用于快速预览生成效果。
+ 
  ## 目录结构
  
  ```bash
