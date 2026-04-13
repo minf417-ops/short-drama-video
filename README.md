@@ -89,7 +89,6 @@ python app.py
  5. **字幕渲染**：SRT 生成 + FFmpeg 字幕叠加（微软雅黑、描边阴影）
  6. **最终合成**：FFmpeg concat 拼接为完整视频
  
- 输出在 `outputs/video_mvp/` 目录。
  
  `docs/video_demo.mp4` 为项目当前视频生成能力的演示样例，可用于快速预览生成效果。
  
