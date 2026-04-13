@@ -32,7 +32,6 @@ ENV/
 
 # 自动生成的输出文件、大文件、临时文件（重点新增）
 outputs/
-docs/
 tmp/
 refer/
 logs/
@@ -40,11 +39,12 @@ logs/
 *.pdf
 *.docx
 *.doc
-*.mp4
 *.wav
 *.png
 *.jpg
 *.jpeg
+*.mp4
+!docs/*.mp4
 
 # IDE和系统文件
 .vscode/
